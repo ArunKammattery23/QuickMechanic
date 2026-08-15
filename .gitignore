@@ -1,0 +1,15 @@
+# Ignore sensitive documentation
+docs/CREDENTIALS.md
+
+# Ignore node_modules
+node_modules/
+
+# Ignore environment files
+.env
+.env.production
+.env.development
+.env.local
+
+# Ignore OS files
+.DS_Store
+Thumbs.db

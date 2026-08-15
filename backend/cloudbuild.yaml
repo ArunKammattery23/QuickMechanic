@@ -1,0 +1,7 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/project-8d23d91b-6c41-4eea-8cf/quickmechanic-repo/quickmechanic-api:latest', '.']
+options:
+  machineType: 'E2_HIGHCPU_8'
+images:
+  - 'us-central1-docker.pkg.dev/project-8d23d91b-6c41-4eea-8cf/quickmechanic-repo/quickmechanic-api:latest'

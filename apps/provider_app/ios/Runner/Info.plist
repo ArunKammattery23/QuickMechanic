@@ -41,6 +41,12 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>LSApplicationQueriesSchemes</key><array><string>tel</string></array><key>NSMicrophoneUsageDescription</key>
+	<string>Use the microphone for voice calls with your assigned roadside assistance partner.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app needs access to location to broadcast your position to customers.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>This app needs access to location to stay online.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

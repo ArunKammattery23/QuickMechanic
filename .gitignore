@@ -3,6 +3,15 @@ docs/CREDENTIALS.md
 
 # Ignore node_modules
 node_modules/
+**/node_modules/
+
+# Ignore generated build output and local analysis artifacts
+**/build/
+**/.next/
+*.tsbuildinfo
+graphify-out/
+scratch/
+*.log
 
 # Ignore environment files
 .env
@@ -13,3 +22,6 @@ node_modules/
 # Ignore OS files
 .DS_Store
 Thumbs.db
+
+# Generated local routing datasets
+data/routing/

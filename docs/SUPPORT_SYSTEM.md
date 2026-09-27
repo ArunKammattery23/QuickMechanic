@@ -1,0 +1,7 @@
+# Support system
+
+Customer and provider Profile screens open Help & support. The guide answers common product questions using a fixed, reviewed FAQ; it does not read account data or claim to resolve a payment. Users can create a ticket, optionally link a Job ID they own, see status/history, and exchange messages with support. The admin dashboard's Support inbox shows tickets and lets an administrator reply or change status.
+
+Ticket states: `OPEN` (new or user reply), `IN_PROGRESS`, `WAITING_FOR_USER` (admin reply), `RESOLVED`, `CLOSED`. Only an administrator changes status. A closed ticket is read-only. Replies and tickets are persisted in `support_tickets` and `support_messages`, with requester and timestamp indexes. Ticket access checks requester ID **and** role; linked jobs are checked for ownership. All endpoints require JWT authentication. Input lengths and categories are validated. Lists currently show the latest 100 tickets, so pagination should be added before a large support operation.
+
+For a local development database, TypeORM's non-production synchronization creates these tables. For a production database, review and apply `scripts/support-tickets-migration.sql` before deploying the API. Keep the project dual-mode configuration and test against the local Docker database first. Do not deploy directly to Cloud Run; use `scripts/deploy.bat` after successful local testing. Ticket conversations refresh every 15 seconds while open. No push notification delivery or SLA automation is included yet.

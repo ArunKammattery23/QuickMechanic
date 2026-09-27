@@ -14,5 +14,17 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    container_name: quickmechanic-redis
+    ports:
+      - "6379:6379"
+
+  redis_demo:
+    image: redis:7-alpine
+    container_name: quickmechanic-demo-redis
+    ports:
+      - "127.0.0.1:6380:6379"
+
 volumes:
   pgdata:

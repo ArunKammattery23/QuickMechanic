@@ -6,7 +6,7 @@ export class DispatchServiceController {
   constructor(private readonly dispatchServiceService: DispatchServiceService) {}
 
   @Get()
-  getHello(): string {
-    return this.dispatchServiceService.getHello();
+  getHello() {
+    return {service: 'dispatch-service', status: 'prototype', message: 'Use the backend application for production dispatch.'};
   }
 }

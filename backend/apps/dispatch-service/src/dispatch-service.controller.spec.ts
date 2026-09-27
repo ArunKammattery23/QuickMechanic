@@ -15,8 +15,8 @@ describe('DispatchServiceController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(dispatchServiceController.getHello()).toBe('Hello World!');
+    it('identifies the legacy service as a prototype without calling a removed method', () => {
+      expect(dispatchServiceController.getHello()).toMatchObject({service: 'dispatch-service', status: 'prototype'});
     });
   });
 });

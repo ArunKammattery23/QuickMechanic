@@ -14,9 +14,9 @@ describe('UsersServiceController', () => {
     usersServiceController = app.get<UsersServiceController>(UsersServiceController);
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(usersServiceController.getHello()).toBe('Hello World!');
-    });
+  it('exposes the legacy pending-KYC service response', async () => {
+    expect(await usersServiceController.getPendingMechanics()).toEqual([
+      expect.objectContaining({kycStatus: 'PENDING'}),
+    ]);
   });
 });

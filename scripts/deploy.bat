@@ -17,7 +17,8 @@ call "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd" r
   --region us-central1 ^
   --allow-unauthenticated ^
   --add-cloudsql-instances "project-8d23d91b-6c41-4eea-8cf:us-central1:quickmechanic-db" ^
-  --set-env-vars="DB_HOST=/cloudsql/project-8d23d91b-6c41-4eea-8cf:us-central1:quickmechanic-db,DB_USER=postgres,DB_PASSWORD=SuperSecurePassword123!,DB_NAME=postgres,NODE_ENV=production" ^
+  --set-env-vars="DB_HOST=/cloudsql/project-8d23d91b-6c41-4eea-8cf:us-central1:quickmechanic-db,DB_USER=postgres,DB_NAME=postgres,NODE_ENV=production" ^
+  --set-secrets="DB_PASSWORD=quickmechanic-db-password:latest" ^
   --quiet
 if %errorlevel% neq 0 exit /b %errorlevel%
 

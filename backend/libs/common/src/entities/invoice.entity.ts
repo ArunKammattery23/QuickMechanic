@@ -21,8 +21,11 @@ export class Invoice {
   @Column('decimal', { precision: 10, scale: 2 })
   distanceCharge: number;
 
-  @Column('decimal', { precision: 10, scale: 2 })
+  @Column('decimal', { precision: 10, scale: 2, default: 0.00 })
   platformCommission: number;
+
+  @Column('decimal', { precision: 10, scale: 2, default: 0.00 })
+  weatherSurcharge: number;
 
   @Column('decimal', { precision: 10, scale: 2 })
   totalAmount: number;

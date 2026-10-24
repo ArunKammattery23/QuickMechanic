@@ -668,10 +668,30 @@ let AuthService = class AuthService {
         }
         throw error;
     }
+    async findByIdentifier(repository, raw) {
+        const identifier = typeof raw === 'string' ? raw.trim() : '';
+        if (!identifier || identifier.length > 200)
+            return null;
+        const qb = repository.createQueryBuilder('u');
+        if (identifier.includes('@')) {
+            qb.where('LOWER(u.email) = :v', { v: identifier.toLowerCase() });
+        }
+        else if (/^\+?[\d\s-]{10,20}$/.test(identifier)) {
+            const digits = identifier.replace(/\D/g, '');
+            if (digits.length < 10)
+                return null;
+            qb.where(`RIGHT(regexp_replace(u."phoneNumber", '\\D', '', 'g'), 10) = :v`, { v: digits.slice(-10) });
+        }
+        else {
+            qb.where('LOWER(u.username) = :v', { v: identifier.toLowerCase() });
+        }
+        const matches = await qb.take(2).getMany();
+        return matches.length === 1 ? matches[0] : null;
+    }
     async adminLogin(data) {
-        if (typeof data.email !== 'string' || typeof data.password !== 'string')
+        if (typeof data?.password !== 'string')
             throw new common_1.UnauthorizedException('Invalid credentials');
-        const user = await this.admUserRepository.findOneBy({ email: data.email.trim() });
+        const user = await this.findByIdentifier(this.admUserRepository, data.identifier ?? data.email);
         if (!user || !await bcrypt.compare(data.password, user.passwordHash))
             throw new common_1.UnauthorizedException('Invalid credentials');
         return { accessToken: await this.jwtService.signAsync({ sub: user.id, email: user.email, role: user.role }), role: user.role };
@@ -714,13 +734,18 @@ let AuthService = class AuthService {
         return { message: 'Password changed' };
     }
     async login(data) {
-        if (typeof data?.email !== 'string' || typeof data?.password !== 'string' || !data.email.trim() || !data.password)
+        const identifier = data?.identifier ?? data?.email;
+        if (typeof identifier !== 'string' || typeof data?.password !== 'string' || !identifier.trim() || !data.password)
             throw new common_1.UnauthorizedException('Invalid credentials');
-        let user = await this.custUserRepository.findOne({ where: { email: data.email } });
-        if (!user)
-            user = await this.providerUserRepository.findOne({ where: { email: data.email } });
-        if (!user)
-            user = await this.admUserRepository.findOne({ where: { email: data.email } });
+        const repositories = data.accountType === 'CUSTOMER' ? [this.custUserRepository]
+            : data.accountType === 'PROVIDER' ? [this.providerUserRepository]
+                : [this.custUserRepository, this.providerUserRepository, this.admUserRepository];
+        let user = null;
+        for (const repository of repositories) {
+            user = await this.findByIdentifier(repository, identifier);
+            if (user)
+                break;
+        }
         if (!user)
             throw new common_1.UnauthorizedException('Invalid credentials');
         const isMatch = await bcrypt.compare(data.password, user.passwordHash);
@@ -873,6 +898,7 @@ let AdmUser = class AdmUser {
     id;
     name;
     email;
+    username;
     passwordHash;
     role;
     phoneNumber;
@@ -894,6 +920,10 @@ __decorate([
     (0, typeorm_1.Column)({ unique: true }),
     __metadata("design:type", String)
 ], AdmUser.prototype, "email", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 50, unique: true, nullable: true }),
+    __metadata("design:type", Object)
+], AdmUser.prototype, "username", void 0);
 __decorate([
     (0, typeorm_1.Column)(),
     __metadata("design:type", String)
@@ -958,6 +988,7 @@ let ProviderUser = class ProviderUser {
     id;
     name;
     email;
+    username;
     googleSubject;
     passwordHash;
     role;
@@ -980,6 +1011,10 @@ __decorate([
     (0, typeorm_1.Column)({ unique: true }),
     __metadata("design:type", String)
 ], ProviderUser.prototype, "email", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 50, unique: true, nullable: true }),
+    __metadata("design:type", Object)
+], ProviderUser.prototype, "username", void 0);
 __decorate([
     (0, typeorm_1.Index)('UQ_PROVIDER_USER_googleSubject', { unique: true }),
     (0, typeorm_1.Column)({ type: 'varchar', length: 255, nullable: true }),
@@ -1048,6 +1083,7 @@ let CustUser = class CustUser {
     id;
     name;
     email;
+    username;
     googleSubject;
     passwordHash;
     role;
@@ -1070,6 +1106,10 @@ __decorate([
     (0, typeorm_1.Column)({ unique: true }),
     __metadata("design:type", String)
 ], CustUser.prototype, "email", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 50, unique: true, nullable: true }),
+    __metadata("design:type", Object)
+], CustUser.prototype, "username", void 0);
 __decorate([
     (0, typeorm_1.Index)('UQ_CUST_USER_googleSubject', { unique: true }),
     (0, typeorm_1.Column)({ type: 'varchar', length: 255, nullable: true }),
@@ -6224,8 +6264,12 @@ exports.DatabaseModule = DatabaseModule = __decorate([
                 useFactory: (configService) => {
                     let ssl = false;
                     if (configService.get('DB_SSL') === 'true') {
+                        const caInline = configService.get('DB_CA_CERT');
                         const caPath = configService.get('DB_CA_PATH');
-                        if (caPath) {
+                        if (caInline && caInline.includes('BEGIN CERTIFICATE')) {
+                            ssl = { rejectUnauthorized: true, ca: caInline.replace(/\\n/g, '\n') };
+                        }
+                        else if (caPath) {
                             const resolved = path.isAbsolute(caPath) ? caPath : path.resolve(process.cwd(), caPath);
                             try {
                                 ssl = { rejectUnauthorized: true, ca: fs.readFileSync(resolved, 'utf8') };

@@ -12,7 +12,8 @@ foreach ($app in $Apps) {
   $dir = Join-Path $root "apps/$app"
   if (-not (Test-Path $dir)) { Write-Warning "skip: $app not found at $dir"; continue }
 
-  Write-Host "`n=== $app ===" -ForegroundColor Cyan
+  Write-Host ""
+  Write-Host "=== $app ===" -ForegroundColor Cyan
   Push-Location $dir
   try {
     Write-Host "flutter clean"       -ForegroundColor DarkGray; flutter clean | Out-Null
@@ -24,13 +25,14 @@ foreach ($app in $Apps) {
     if (Test-Path $aab) {
       $full = (Resolve-Path $aab).Path
       $size = [math]::Round((Get-Item $aab).Length / 1MB, 2)
-      Write-Host "✓ $app ready: $full ($size MB)" -ForegroundColor Green
+      Write-Host "[OK] $app ready: $full ($size MB)" -ForegroundColor Green
     } else {
-      Write-Warning "✗ $app did not produce $aab"
+      Write-Warning "[FAIL] $app did not produce $aab"
     }
   } finally {
     Pop-Location
   }
 }
 
-Write-Host "`nAll done. Upload each app-release.aab to Play Console → Closed testing → Create new release."
+Write-Host ""
+Write-Host "All done. Upload each app-release.aab to Play Console (Closed testing -> Create new release)."

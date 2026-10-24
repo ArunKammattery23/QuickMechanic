@@ -77,7 +77,7 @@ class _AdminGateState extends State<AdminGate> {
             const SizedBox(height: 5),
             const Text('Sign in to manage support, providers and payments.', style: TextStyle(color: AdminColors.muted, height: 1.4)),
             const SizedBox(height: 24),
-            TextField(controller: _email, keyboardType: TextInputType.emailAddress, autofillHints: const [AutofillHints.email], decoration: adminInput('Admin email', icon: Icons.alternate_email)),
+            TextField(controller: _email, keyboardType: TextInputType.text, autofillHints: const [AutofillHints.username], decoration: adminInput('Username, email or mobile', icon: Icons.person_outline)),
             const SizedBox(height: 14),
             TextField(controller: _password, obscureText: true, autofillHints: const [AutofillHints.password], onSubmitted: (_) => _login(), decoration: adminInput('Password', icon: Icons.lock_outline)),
             if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: const TextStyle(color: Color(0xFFFF8C86)))),

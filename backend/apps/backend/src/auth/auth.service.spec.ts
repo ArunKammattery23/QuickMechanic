@@ -18,8 +18,51 @@ function repository(users: any[] = []) {
       Object.assign(user, values); return {affected: 1};
     }),
     create: jest.fn((user: any) => user),
+    // Emulates the username / email / mobile sign-in lookup in AuthService.
+    createQueryBuilder: jest.fn(() => {
+      let match: (user: any) => boolean = () => false;
+      const qb: any = {
+        where: (sql: string, { v }: { v: string }) => {
+          const last10 = (p: string) => String(p ?? '').replace(/\D/g, '').slice(-10);
+          match = sql.includes('email') ? u => String(u.email ?? '').toLowerCase() === v
+            : sql.includes('phoneNumber') ? u => last10(u.phoneNumber) === v
+            : u => String(u.username ?? '').toLowerCase() === v;
+          return qb;
+        },
+        take: () => qb,
+        getMany: async () => users.filter(match),
+      };
+      return qb;
+    }),
   };
 }
+
+describe('AuthService sign-in identifiers', () => {
+  async function serviceWith(customer: any, provider: any) {
+    const jwt = { signAsync: jest.fn(async () => 'signed-jwt') } as unknown as JwtService;
+    return new AuthService(repository([]) as any, repository([provider]) as any, repository([customer]) as any, repository() as any, jwt);
+  }
+
+  it('accepts a username, email or mobile number, scoped to the app', async () => {
+    const hash = await bcrypt.hash('Customer2026', 10);
+    const customer = { id: 'c1', username: 'Customer', email: 'c@example.com', phoneNumber: '+919000090001', role: 'CUSTOMER', passwordHash: hash };
+    // Same phone on a provider account must not leak into the customer app.
+    const provider = { id: 'p1', username: 'Provider', email: 'p@example.com', phoneNumber: '+919000090001', role: 'MECHANIC', passwordHash: hash };
+    const service = await serviceWith(customer, provider);
+
+    for (const identifier of ['customer', 'C@EXAMPLE.COM', '9000090001', '+91 90000 90001']) {
+      await expect(service.login({ identifier, password: 'Customer2026', accountType: 'CUSTOMER' }))
+        .resolves.toEqual({ accessToken: 'signed-jwt', role: 'CUSTOMER' });
+    }
+    await expect(service.login({ identifier: '9000090001', password: 'Customer2026', accountType: 'PROVIDER' }))
+      .resolves.toEqual({ accessToken: 'signed-jwt', role: 'MECHANIC' });
+    await expect(service.login({ identifier: 'Customer', password: 'wrong', accountType: 'CUSTOMER' }))
+      .rejects.toThrow('Invalid credentials');
+    // Older app builds still send `email`.
+    await expect(service.login({ email: 'c@example.com', password: 'Customer2026' }))
+      .resolves.toEqual({ accessToken: 'signed-jwt', role: 'CUSTOMER' });
+  });
+});
 
 describe('AuthService administrator authentication', () => {
   const originalEnvironment = process.env.NODE_ENV;

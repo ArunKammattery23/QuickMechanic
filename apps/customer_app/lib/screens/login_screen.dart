@@ -584,7 +584,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Please enter email and password'),
+          content: const Text('Please enter your username, email or mobile and password'),
           backgroundColor: const Color(0xFF0066CC),
           behavior: SnackBarBehavior.floating,
           shape:
@@ -817,7 +817,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   // Email Field
                                   _buildGlassTextField(
                                     controller: _emailController,
-                                    hintText: 'Email or Phone',
+                                    hintText: 'Username, email or mobile',
                                     icon: Icons.alternate_email_rounded,
                                   ),
                                   const SizedBox(height: 16),

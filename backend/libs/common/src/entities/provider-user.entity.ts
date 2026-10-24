@@ -16,6 +16,10 @@ export class ProviderUser {
   @Column({ unique: true })
   email: string;
 
+  // Optional short sign-in name (e.g. test accounts). Unique per table; NULLs allowed.
+  @Column({ type: 'varchar', length: 50, unique: true, nullable: true })
+  username: string | null;
+
   @Index('UQ_PROVIDER_USER_googleSubject', { unique: true })
   @Column({ type: 'varchar', length: 255, nullable: true })
   googleSubject: string | null;

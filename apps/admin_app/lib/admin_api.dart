@@ -20,7 +20,7 @@ class AdminApi {
     try {
       response = await http.post(Uri.parse('$baseUrl/auth/admin-login'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': email.trim(), 'password': password}),
+        body: jsonEncode({'identifier': email.trim(), 'password': password}),
       ).timeout(const Duration(seconds: 20));
     } on SocketException { throw _connectionError(); }
       on http.ClientException { throw _connectionError(); }

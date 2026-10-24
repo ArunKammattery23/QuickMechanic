@@ -261,9 +261,29 @@ export class AuthService {
     throw error;
   }
 
-  async adminLogin(data: {email: string; password: string}) {
-    if (typeof data.email !== 'string' || typeof data.password !== 'string') throw new UnauthorizedException('Invalid credentials');
-    const user = await this.admUserRepository.findOneBy({email: data.email.trim()});
+  // One sign-in field accepts a username, an email address or a mobile number.
+  // Mobile numbers match on their last 10 digits so "+91 98765 43210" and
+  // "9876543210" find the same account; ambiguous matches are refused.
+  private async findByIdentifier<T extends { id: string }>(repository: Repository<T>, raw: unknown): Promise<T | null> {
+    const identifier = typeof raw === 'string' ? raw.trim() : '';
+    if (!identifier || identifier.length > 200) return null;
+    const qb = repository.createQueryBuilder('u');
+    if (identifier.includes('@')) {
+      qb.where('LOWER(u.email) = :v', { v: identifier.toLowerCase() });
+    } else if (/^\+?[\d\s-]{10,20}$/.test(identifier)) {
+      const digits = identifier.replace(/\D/g, '');
+      if (digits.length < 10) return null;
+      qb.where(`RIGHT(regexp_replace(u."phoneNumber", '\\D', '', 'g'), 10) = :v`, { v: digits.slice(-10) });
+    } else {
+      qb.where('LOWER(u.username) = :v', { v: identifier.toLowerCase() });
+    }
+    const matches = await qb.take(2).getMany();
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  async adminLogin(data: {email?: string; identifier?: string; password: string}) {
+    if (typeof data?.password !== 'string') throw new UnauthorizedException('Invalid credentials');
+    const user = await this.findByIdentifier(this.admUserRepository, data.identifier ?? data.email);
     if (!user || !await bcrypt.compare(data.password, user.passwordHash)) throw new UnauthorizedException('Invalid credentials');
     return {accessToken: await this.jwtService.signAsync({sub: user.id, email: user.email, role: user.role}), role: user.role};
   }
@@ -304,12 +324,19 @@ export class AuthService {
   }
 
   async login(data: any) {
-    if (typeof data?.email !== 'string' || typeof data?.password !== 'string' || !data.email.trim() || !data.password) throw new UnauthorizedException('Invalid credentials');
-    // Single endpoint login check for simplicity first. 
-    // Wait, the user wanted 3 separate endpoints. But for now, we will just support it here.
-    let user: any = await this.custUserRepository.findOne({ where: { email: data.email } });
-    if (!user) user = await this.providerUserRepository.findOne({ where: { email: data.email } });
-    if (!user) user = await this.admUserRepository.findOne({ where: { email: data.email } });
+    const identifier = data?.identifier ?? data?.email;
+    if (typeof identifier !== 'string' || typeof data?.password !== 'string' || !identifier.trim() || !data.password) throw new UnauthorizedException('Invalid credentials');
+    // Apps send accountType so a person who is both a customer and a provider
+    // (same phone number) reaches the account for the app they opened.
+    const repositories: Repository<any>[] =
+      data.accountType === 'CUSTOMER' ? [this.custUserRepository]
+      : data.accountType === 'PROVIDER' ? [this.providerUserRepository]
+      : [this.custUserRepository, this.providerUserRepository, this.admUserRepository];
+    let user: any = null;
+    for (const repository of repositories) {
+      user = await this.findByIdentifier(repository, identifier);
+      if (user) break;
+    }
 
     if (!user) throw new UnauthorizedException('Invalid credentials');
 

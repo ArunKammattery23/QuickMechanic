@@ -27,11 +27,18 @@ import { ReputationLog } from '../entities/reputation-log.entity';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         // SSL/TLS for managed providers (Aiven, Supabase, Neon). Prefer verifying
-        // against a pinned CA certificate when one is provided.
+        // against a pinned CA certificate when one is provided. Hosts like Render
+        // and Cloud Run cannot ship files from a gitignored path, so the cert
+        // may be passed as DB_CA_CERT (full PEM) instead of DB_CA_PATH.
         let ssl: boolean | { rejectUnauthorized: boolean; ca?: string } = false;
         if (configService.get<string>('DB_SSL') === 'true') {
+          const caInline = configService.get<string>('DB_CA_CERT');
           const caPath = configService.get<string>('DB_CA_PATH');
-          if (caPath) {
+          if (caInline && caInline.includes('BEGIN CERTIFICATE')) {
+            // Env-var CAs often arrive with escaped newlines when pasted through
+            // UIs; normalize so Node's TLS parser accepts them.
+            ssl = { rejectUnauthorized: true, ca: caInline.replace(/\\n/g, '\n') };
+          } else if (caPath) {
             const resolved = path.isAbsolute(caPath) ? caPath : path.resolve(process.cwd(), caPath);
             try {
               ssl = { rejectUnauthorized: true, ca: fs.readFileSync(resolved, 'utf8') };

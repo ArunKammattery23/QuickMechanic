@@ -12,7 +12,7 @@ class AdminApi {
   static String get baseUrl => _apiOverride.isNotEmpty
       ? _apiOverride
       : kReleaseMode
-          ? 'https://quickmechanic-api-x6f6mkpywq-uc.a.run.app'
+          ? 'https://quickmechanic-api.onrender.com'
           : 'http://127.0.0.1:3000';
 
   static Future<Map<String, dynamic>> login(String email, String password) async {

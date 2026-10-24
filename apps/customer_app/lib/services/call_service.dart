@@ -1,4 +1,5 @@
 import 'ice_candidate_buffer.dart';
+import 'call_audio_config.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -10,6 +11,14 @@ import '../config/api_config.dart';
 import 'socket_service.dart';
 
 enum CallPhase { idle, ringing, connecting, connected, failed }
+
+class CallSignalingException implements Exception {
+  final String message;
+  final String? code;
+  const CallSignalingException(this.message, {this.code});
+  @override
+  String toString() => message;
+}
 
 class CallService extends ChangeNotifier {
   static final CallService _instance = CallService._internal();
@@ -29,10 +38,13 @@ class CallService extends ChangeNotifier {
   dynamic _offer;
   Timer? _timeout;
   Timer? _disconnectTimeout;
+  Future<void>? _endingCall;
   CallPhase phase = CallPhase.idle;
   String peerName = '';
   String message = '';
   bool muted = false;
+  bool speakerEnabled = false;
+  bool audioRouteChanging = false;
   bool relayConfigured = false;
 
   Future<void> init(String role) async {
@@ -40,9 +52,11 @@ class CallService extends ChangeNotifier {
     if (socket == null || identical(socket, _boundSocket)) return;
     _boundSocket = socket;
     socket.on('incoming_call', (data) async {
+      final ending = _endingCall;
+      if (ending != null) await ending;
       if (phase != CallPhase.idle && phase != CallPhase.failed) {
         socket.emit('end_call',
-            {'targetId': data['callerId'], 'callId': data['callId']});
+            {'targetId': data['callerId'], 'callId': data['callId'], 'reason': 'busy'});
         return;
       }
       _targetId = data['callerId'];
@@ -62,6 +76,7 @@ class CallService extends ChangeNotifier {
       try {
         await _peerConnection?.setRemoteDescription(RTCSessionDescription(
             data['answer']['sdp'], data['answer']['type']));
+        if (_callId != id) return;
         _remoteReady = true;
         await _flushIce();
       } catch (_) {
@@ -83,8 +98,13 @@ class CallService extends ChangeNotifier {
           await _fail('Could not connect the call. Please retry.');
       }
     });
-    socket.on('call_ended', (data) {
-      if (_matches(data)) endCall(notifyPeer: false);
+    socket.on('call_ended', (data) async {
+      if (!_matches(data)) return;
+      final reason = data['reason'];
+      await endCall(notifyPeer: false);
+      if (_callId == null && reason == 'busy') {
+        _setPhase(CallPhase.failed, '$peerName is busy—try again');
+      }
     });
     socket.on('disconnect', (_) {
       if (_callId != null) _fail('Connection lost. Reconnect and try again.');
@@ -108,6 +128,8 @@ class CallService extends ChangeNotifier {
   }
 
   Future<void> startCall(String targetId, String myName) async {
+    final ending = _endingCall;
+    if (ending != null) await ending;
     if (phase != CallPhase.idle && phase != CallPhase.failed) return;
     await init('');
     if (phase != CallPhase.idle && phase != CallPhase.failed) return;
@@ -125,8 +147,11 @@ class CallService extends ChangeNotifier {
     try {
       await _createPeer(id!);
       if (_callId != id) return;
-      final offer = await _peerConnection!.createOffer();
-      await _peerConnection!.setLocalDescription(offer);
+      final pc = _peerConnection!;
+      final offer = await pc.createOffer();
+      if (_callId != id) return;
+      await pc.setLocalDescription(offer);
+      if (_callId != id) return;
       await _signal('call_offer', {
         'offer': {'sdp': offer.sdp, 'type': offer.type},
         'callerName': myName
@@ -134,6 +159,8 @@ class CallService extends ChangeNotifier {
       if (_callId != id) return;
       _offerSent = true;
       _flushLocalIce();
+    } on CallSignalingException catch (e) {
+      if (_callId == id) await _fail(e.message);
     } catch (e) {
       if (_callId == id)
         await _fail(
@@ -142,6 +169,8 @@ class CallService extends ChangeNotifier {
   }
 
   Future<void> acceptCall() async {
+    final ending = _endingCall;
+    if (ending != null) await ending;
     if (phase != CallPhase.ringing) return;
     final id = _callId;
     _setPhase(CallPhase.connecting, 'Connecting…');
@@ -151,18 +180,24 @@ class CallService extends ChangeNotifier {
       } catch (_) {}
       await _createPeer(id!);
       if (_callId != id) return;
-      await _peerConnection!.setRemoteDescription(
+      final pc = _peerConnection!;
+      await pc.setRemoteDescription(
           RTCSessionDescription(_offer['sdp'], _offer['type']));
+      if (_callId != id) return;
       _remoteReady = true;
       await _flushIce();
-      final answer = await _peerConnection!.createAnswer();
-      await _peerConnection!.setLocalDescription(answer);
+      final answer = await pc.createAnswer();
+      if (_callId != id) return;
+      await pc.setLocalDescription(answer);
+      if (_callId != id) return;
       await _signal('call_answer', {
         'answer': {'sdp': answer.sdp, 'type': answer.type}
       });
       if (_callId != id) return;
       _offerSent = true;
       _flushLocalIce();
+    } on CallSignalingException catch (e) {
+      if (_callId == id) await _fail(e.message);
     } catch (e) {
       if (_callId == id)
         await _fail(
@@ -181,10 +216,13 @@ class CallService extends ChangeNotifier {
     final config = jsonDecode(response.body);
     if (_callId != id) return;
     relayConfigured = config['relayConfigured'] == true;
+    await CallAudio.configure();
+    if (_callId != id) return;
     final pc = await createPeerConnection(
         {'iceServers': config['iceServers'], 'sdpSemantics': 'unified-plan'});
     if (_callId != id) {
-      await pc.close();
+      await _cleanup(pc.close);
+      await _cleanup(pc.dispose);
       return;
     }
     _peerConnection = pc;
@@ -252,8 +290,12 @@ class CallService extends ChangeNotifier {
       if (data is Map && data['success'] == true) {
         done.complete();
       } else {
-        done.completeError(StateError(
-            data is Map ? '${data['message']}' : 'Signaling failed'));
+        done.completeError(CallSignalingException(
+          data is Map && data['message'] is String
+              ? data['message'] as String
+              : 'Could not connect the call. Please retry.',
+          code: data is Map && data['code'] is String ? data['code'] as String : null,
+        ));
       }
     });
     await done.future.timeout(const Duration(seconds: 10));
@@ -284,12 +326,53 @@ class CallService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> toggleSpeaker() async {
+    if (phase != CallPhase.connected || audioRouteChanging) return;
+    final id = _callId;
+    final enabled = !speakerEnabled;
+    audioRouteChanging = true;
+    notifyListeners();
+    try {
+      await CallAudio.setSpeakerEnabled(enabled);
+      if (_callId == id && phase == CallPhase.connected) {
+        speakerEnabled = enabled;
+      }
+    } catch (_) {
+      if (_callId == id && phase == CallPhase.connected) {
+        message = 'Could not change audio output. Please try again.';
+      }
+    } finally {
+      if (_callId == id) {
+        audioRouteChanging = false;
+        notifyListeners();
+      }
+    }
+  }
+
   Future<void> _fail(String reason) async {
     await endCall();
     if (_callId == null) _setPhase(CallPhase.failed, reason);
   }
 
-  Future<void> endCall({bool notifyPeer = true}) async {
+  Future<void> endCall({bool notifyPeer = true}) {
+    final pending = _endingCall;
+    if (pending != null) return pending;
+    final done = Completer<void>();
+    _endingCall = done.future;
+    () async {
+      try {
+        await _finishEndCall(notifyPeer: notifyPeer);
+        done.complete();
+      } catch (error, stack) {
+        done.completeError(error, stack);
+      } finally {
+        _endingCall = null;
+      }
+    }();
+    return done.future;
+  }
+
+  Future<void> _finishEndCall({required bool notifyPeer}) async {
     if (notifyPeer && _targetId != null)
       _socketService.socket
           ?.emit('end_call', {'targetId': _targetId, 'callId': _callId});
@@ -302,6 +385,8 @@ class CallService extends ChangeNotifier {
     _pendingIce.clear();
     _localIce.clear();
     muted = false;
+    speakerEnabled = false;
+    audioRouteChanging = false;
     final stream = _localStream;
     _localStream = null;
     final pc = _peerConnection;
@@ -313,10 +398,22 @@ class CallService extends ChangeNotifier {
       await Vibration.cancel();
     } catch (_) {}
     for (final track in stream?.getTracks() ?? <MediaStreamTrack>[]) {
-      await track.stop();
+      await _cleanup(track.stop);
     }
-    await stream?.dispose();
-    await pc?.close();
-    await view?.dispose();
+    if (stream != null) await _cleanup(stream.dispose);
+    if (pc != null) {
+      await _cleanup(pc.close);
+      await _cleanup(pc.dispose);
+    }
+    if (view != null) await _cleanup(view.dispose);
+    if (pc != null || stream != null) await _cleanup(CallAudio.reset);
+  }
+
+  Future<void> _cleanup(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (error) {
+      debugPrint('Call cleanup failed: $error');
+    }
   }
 }

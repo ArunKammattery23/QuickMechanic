@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Get, Body, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Patch, Get, Body, Req, UseGuards, HttpCode } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
@@ -27,6 +27,12 @@ export class AuthController {
   @Post('admin-login')
   async adminLogin(@Body() body: any) {
     return this.authService.adminLogin(body);
+  }
+
+  @Post('google')
+  @HttpCode(200)
+  google(@Body() body: unknown) {
+    return this.authService.googleAuthentication(body);
   }
 
   @Get('admin/me')

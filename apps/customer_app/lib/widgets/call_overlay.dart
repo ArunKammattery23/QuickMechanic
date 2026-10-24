@@ -49,6 +49,24 @@ class CallOverlay extends StatelessWidget {
                                         child: const Text('Answer')),
                                   if (call.phase == CallPhase.connected)
                                     Semantics(
+                                      button: true,
+                                      label: call.speakerEnabled
+                                          ? 'Turn speaker off'
+                                          : 'Turn speaker on',
+                                      child: IconButton(
+                                        onPressed: call.audioRouteChanging
+                                            ? null
+                                            : call.toggleSpeaker,
+                                        icon: Icon(
+                                          call.speakerEnabled
+                                              ? Icons.volume_up
+                                              : Icons.phone_in_talk,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  if (call.phase == CallPhase.connected)
+                                    Semantics(
                                         label: call.muted ? 'Unmute' : 'Mute',
                                         button: true,
                                         child: IconButton(

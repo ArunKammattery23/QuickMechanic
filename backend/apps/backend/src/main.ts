@@ -40,9 +40,11 @@ async function bootstrap() {
   );
 
   const configService = app.get(ConfigService);
-  const redisHost = configService.get<string>('REDIS_HOST') || 'localhost';
-  const redisPort = configService.get<string>('REDIS_PORT') || '6379';
-  const redisUrl = `redis://${redisHost}:${redisPort}`;
+  // Prefer a full REDIS_URL (e.g. the rediss:// string from a managed Redis
+  // provider) so TLS, auth and non-standard ports flow through unchanged.
+  // Fall back to the historical REDIS_HOST/REDIS_PORT split for local Docker.
+  const redisUrl = configService.get<string>('REDIS_URL') ||
+    `redis://${configService.get<string>('REDIS_HOST') || 'localhost'}:${configService.get<string>('REDIS_PORT') || '6379'}`;
 
   const redisIoAdapter = new RedisIoAdapter(app);
   await redisIoAdapter.connectToRedis(redisUrl);

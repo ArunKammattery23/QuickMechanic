@@ -11,6 +11,7 @@ import { createServer, Server } from 'http';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { randomBytes, createHash } from 'crypto';
+import { freemem } from 'os';
 import * as bcrypt from 'bcryptjs';
 import { AuthService } from './auth/auth.service';
 import { AuthController } from './auth/auth.controller';
@@ -134,9 +135,14 @@ local('Local workflow and concurrent-user acceptance', () => {
     await configure(provider);
   });
   afterAll(async () => {
-    sockets.forEach(socket=>socket.close());
+    await Promise.all(sockets.filter(socket=>socket.readyState!==3).map(socket=>new Promise<void>(resolve=>{
+      const timer=setTimeout(()=>{socket.terminate();resolve();},2000);
+      socket.once('close',()=>{clearTimeout(timer);resolve();});socket.close();
+    })));
+    // Let server-side disconnect hooks release reservations before Redis closes.
+    await new Promise(resolve=>setTimeout(resolve,100));
     if(app) await app.close();
-    if(redis) {const keys=await redis.keys(schema+':*'); if(keys.length) await redis.call('DEL',...keys); await redis.quit();}
+    if(redis) {const keys=await redis.keys(schema+':*'); if(keys.length) await redis.del(...keys.map(key=>key.slice(schema.length+1))); await redis.quit();}
     if(router) await new Promise<void>(resolve=>router.close(()=>resolve()));
     if(db?.isInitialized) {if(!/^qm_workflow_\d+$/.test(schema))throw new Error('Unsafe schema');await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await db.destroy();}
     for(const key of ['PAYMENT_MODE','OSRM_BASE_URL']) {if(savedEnv[key]===undefined)delete process.env[key];else process.env[key]=savedEnv[key];}
@@ -295,41 +301,101 @@ local('Local workflow and concurrent-user acceptance', () => {
 
   it('keeps concurrent authenticated sockets connected through repeated GPS broadcasts and reconnects', async () => {
     const count=Number(process.env.QM_SOCKET_PAIRS || 100), soakSeconds=Number(process.env.QM_SOAK_SECONDS || 0), hash=await bcrypt.hash(password,4);
-    if(!Number.isInteger(count)||count<1||count>500||!Number.isFinite(soakSeconds)||soakSeconds<0||soakSeconds>300)throw new Error('Invalid bounded local load settings');
-    const pairs=await Promise.all(Array.from({length:count},async(_,i)=>{
+    if(!Number.isInteger(count)||count<1||count>5000||!Number.isFinite(soakSeconds)||soakSeconds<0||soakSeconds>300)throw new Error('Invalid bounded local load settings');
+    const checkMemory = () => { if(freemem()<2*1024**3 || process.memoryUsage().rss>4*1024**3) throw new Error('Local load stopped at memory safety limit'); };
+    const pairs: {c: CustUser; p: ProviderUser}[] = [];
+    for(let offset=0;offset<count;offset+=50) {
+      checkMemory();
+      pairs.push(...await Promise.all(Array.from({length:Math.min(50,count-offset)},async(_,n)=>{
+      const i=offset+n;
       const c=await db.getRepository(CustUser).save({email:`sc${i}@workflow.invalid`,phoneNumber:`sc${i}`,passwordHash:hash});
       const p=await db.getRepository(ProviderUser).save({email:`sp${i}@workflow.invalid`,phoneNumber:`sp${i}`,passwordHash:hash});
       await db.getRepository(MechanicProfile).save({user:p,isOnline:true});await jobFor(p,c,JobStatus.EN_ROUTE);return {c,p};
-    }));
+      })));
+    }
     const clients: {pair: typeof pairs[number]; c: any; p: any}[] = [];
     // Ramp up in batches so the test measures sustained connected users, not
     // the Windows loopback SYN backlog during an instantaneous connection flood.
     for(let offset=0;offset<pairs.length;offset+=25) {
+      checkMemory();
       const batch=await Promise.allSettled(pairs.slice(offset,offset+25).map(async pair=>({pair,c:await connect(token(pair.c)),p:await connect(token(pair.p))})));
       for(const result of batch) {if(result.status==='rejected')throw result.reason;clients.push(result.value);}
+      if(clients.length % 500===0) process.stdout.write(`RAMP: ${clients.length*2} authenticated users connected\n`);
     }
+    // Every pair negotiates an independent signaling session. Audio media is
+    // intentionally not simulated: real RTP/TURN and handset acoustics need devices.
+    const leaks: string[] = [];
+    clients.forEach(({pair,c,p},i) => {
+      for(const [socket,peer] of [[c,pair.p.id],[p,pair.c.id]] as const) socket.on('message',(raw:Buffer)=>{
+        const packet=raw.toString(); if(!packet.startsWith('42['))return;
+        const [name,payload]=JSON.parse(packet.slice(2));
+        if(['incoming_call','call_answered','new_ice_candidate'].includes(name) &&
+          (payload.callerId!==peer || payload.callId!==`${schema}-${i}`)) leaks.push(`${i}:${name}`);
+      });
+    });
+    for(let offset=0;offset<clients.length;offset+=50) {
+      checkMemory();
+      await Promise.all(clients.slice(offset,offset+50).map(async ({pair,c,p},n)=>{
+        const callId=`${schema}-${offset+n}`;
+        const incoming=event(p,'incoming_call');
+        expect((await signal(c,'call_offer',{targetId:pair.p.id,callId,offer:{sdp:'test-offer',type:'offer'}})).success).toBe(true);
+        expect((await incoming).callerId).toBe(pair.c.id);
+        const answered=event(c,'call_answered');
+        expect((await signal(p,'call_answer',{targetId:pair.c.id,callId,answer:{sdp:'test-answer',type:'answer'}})).success).toBe(true);
+        await answered;
+        for(const [from,to,targetId] of [[c,p,pair.p.id],[p,c,pair.c.id]]) {
+          const ice=event(to,'new_ice_candidate');
+          expect((await signal(from,'ice_candidate',{targetId,callId,candidate:{candidate:'test-candidate'}})).success).toBe(true);
+          expect((await ice).callId).toBe(callId);
+        }
+      }));
+    }
+    if(clients.length>1) {
+      const busyJob=await jobFor(clients[0].pair.p,clients[1].pair.c,JobStatus.REQUESTED);
+      expect(await signal(clients[1].c,'call_offer',{targetId:clients[0].pair.p.id,callId:`${schema}-busy`,offer:{sdp:'busy-test'}}))
+        .toMatchObject({success:false,code:'TARGET_BUSY',message:'Provider is busy—try again'});
+      await db.getRepository(ServiceRequest).update(busyJob.id,{status:JobStatus.CANCELLED});
+    }
+    process.stdout.write(`CALLS: ${count} simultaneous reserved/answered sessions; two-way ICE and busy rejection passed\n`);
     const rss=process.memoryUsage().rss;const start=performance.now();
     let round=0;
-    do {await Promise.all(clients.map(async ({pair,c,p})=>{
+    do {
+      checkMemory();
+      for(let offset=0;offset<clients.length;offset+=200) await Promise.all(clients.slice(offset,offset+200).map(async ({pair,c,p})=>{
       const received=event(c,'mechanic_location_changed');
       p.send('42'+JSON.stringify(['update_location',{mechanicId:pair.p.id,lat:12+round*.0001,lng:77}]));
       expect((await received).mechanicId).toBe(pair.p.id);
-    })); round++;
+      })); round++;
       if(soakSeconds>0) {
         const reads=await Promise.all(clients.slice(0,20).map(({pair})=>http('/dispatch/nearby','POST',{lat:12,lng:77,serviceType:serviceType.name,vehicleCategoryId:vehicle.id},token(pair.c))));
         expect(reads.every(r=>r.status===201)).toBe(true);
         await new Promise(resolve=>setTimeout(resolve,3000));
       }
     }while(soakSeconds>0?performance.now()-start<soakSeconds*1000:round<5);
-    const sample=clients[0];const incoming=event(sample.p,'incoming_call');
-    sample.c.send('42'+JSON.stringify(['call_offer',{targetId:sample.pair.p.id,callId:'load-call',offer:{sdp:'test'}}]));
-    expect((await incoming).callerId).toBe(sample.pair.c.id);
+    expect(leaks).toEqual([]);
+    // Successful hangup after the soak also proves each active lease survived.
+    for(let offset=0;offset<clients.length;offset+=100) await Promise.all(clients.slice(offset,offset+100).map(async ({pair,c,p},n)=>{
+      const ended=event(p,'call_ended');
+      expect((await signal(c,'end_call',{targetId:pair.p.id,callId:`${schema}-${offset+n}`})).success).toBe(true);
+      await ended;
+    }));
+    const sample=clients[0];
     sample.c.close();const reconnected=await connect(token(sample.pair.c));const received=event(reconnected,'mechanic_location_changed');
     reconnected.send('42'+JSON.stringify(['subscribe_to_mechanic',{mechanicId:sample.pair.p.id}]));await received;
     expect(clients.every(client=>client.p.readyState===1 && (client===sample || client.c.readyState===1))).toBe(true);
     expect(reconnected.readyState).toBe(1);
-    process.stdout.write(`SOCKETS: ${count*2} authenticated connections; ${round*count} GPS updates delivered; reconnect + call signaling passed; elapsed=${Math.round(performance.now()-start)}ms rssDeltaMiB=${((process.memoryUsage().rss-rss)/1048576).toFixed(1)}\n`);
-  }, 420000);
+    process.stdout.write(`SOCKETS: ${count*2} authenticated connections; ${round*count} GPS updates delivered; ${count} call sessions ended cleanly; zero cross-user call leaks; reconnect passed; elapsed=${Math.round(performance.now()-start)}ms rssMiB=${(process.memoryUsage().rss/1048576).toFixed(1)} rssDeltaMiB=${((process.memoryUsage().rss-rss)/1048576).toFixed(1)}\n`);
+  }, 900000);
+  let ackId=0;
+  function signal(ws:any,name:string,payload:any):Promise<any> {
+    const id=++ackId, prefix=`43${id}[`;
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{ws.off('message',handler);reject(new Error('Missing acknowledgement: '+name));},15000);
+      const handler=(raw:Buffer)=>{const packet=raw.toString();if(!packet.startsWith(prefix))return;
+        clearTimeout(timer);ws.off('message',handler);resolve(JSON.parse(packet.slice(2+String(id).length))[0]);};
+      ws.on('message',handler);ws.send(`42${id}`+JSON.stringify([name,payload]));
+    });
+  }
   function connect(bearer:string):Promise<any> {
     return new Promise((resolve,reject)=>{
       const ws=new WebSocketClient(base.replace('http:','ws:')+'/socket.io/?EIO=4&transport=websocket');sockets.push(ws);

@@ -11,7 +11,7 @@ describe('Authenticated calls and tracking', () => {
   const user = { sub: 'customer-1', role: 'CUSTOMER' };
   const token = jwt.sign(user);
   const access = { canContact: jest.fn(), trackingCustomers: jest.fn(), updatePresence: jest.fn() };
-  const redis = { set: jest.fn(), get: jest.fn() };
+  const redis = { set: jest.fn(), get: jest.fn(), eval: jest.fn().mockResolvedValue('OK') };
   const location = new LocationGateway(
     { getOrThrow: () => redis } as any,
     jwt,
@@ -102,10 +102,10 @@ describe('Authenticated calls and tracking', () => {
   });
   it('routes call offers by verified identity, ignoring caller-supplied roles', async () => {
     access.canContact.mockResolvedValue(true);
-    const calls = new CallGateway(access as any),
+    const calls = new CallGateway(access as any, { getOrThrow: () => redis } as any),
       emit = jest.fn();
     calls.server = {
-      in: () => ({ fetchSockets: async () => [{}] }),
+      in: () => ({ fetchSockets: async () => [{ id: 'provider-device' }] }),
       to: jest.fn(() => ({ emit })),
     } as any;
     expect(
@@ -116,10 +116,10 @@ describe('Authenticated calls and tracking', () => {
           callId: 'call-1',
           offer: { sdp: 'offer' },
         },
-        { user } as any,
+        { user, id: 'customer-device', connected: true } as any,
       ),
     ).toEqual({ success: true });
-    expect(calls.server.to).toHaveBeenCalledWith('user_mechanic-1');
+    expect(calls.server.to).toHaveBeenCalledWith('provider-device');
     expect(emit).toHaveBeenCalledWith(
       'incoming_call',
       expect.objectContaining({ callerId: 'customer-1', callId: 'call-1' }),
@@ -127,17 +127,17 @@ describe('Authenticated calls and tracking', () => {
   });
   it('reports offline recipients instead of pretending to ring', async () => {
     access.canContact.mockResolvedValue(true);
-    const calls = new CallGateway(access as any);
+    const calls = new CallGateway(access as any, { getOrThrow: () => redis } as any);
     calls.server = { in: () => ({ fetchSockets: async () => [] }) } as any;
     expect(
-      await calls.offer({ targetId: 'mechanic-1', callId: 'call-1' }, {
+      await calls.offer({ targetId: 'mechanic-1', callId: 'call-1', offer: { sdp: 'test' } }, {
         user,
       } as any),
-    ).toEqual({ success: false, message: 'The other person is offline' });
+    ).toMatchObject({ success: false, code: 'OFFLINE', message: 'The other person is offline' });
   });
   it('blocks signaling to people outside the caller’s active job', async () => {
     access.canContact.mockResolvedValue(false);
-    const calls = new CallGateway(access as any);
+    const calls = new CallGateway(access as any, { getOrThrow: () => redis } as any);
     expect(
       await calls.offer({ targetId: 'other', callId: 'call-1' }, {
         user,

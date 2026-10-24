@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 
 class ApiConfig {
   static const String liveBaseUrl =
-      'https://quickmechanic-api-production.a.run.app';
+      'https://quickmechanic-api-x6f6mkpywq-uc.a.run.app';
   // Android USB development uses `adb reverse tcp:3000 tcp:3000`.
   // Or pass a LAN address with --dart-define=API_BASE_URL=http://<LAN-IP>:3000.
   static const String testBaseUrl = 'http://127.0.0.1:3000';

@@ -8,6 +8,8 @@ import 'dashboard_screen.dart';
 import 'forgot_password_screen.dart';
 import '../config/api_config.dart';
 import '../services/api_service.dart';
+import '../services/google_auth_service.dart';
+import '../widgets/google_auth_dialogs.dart';
 
 // ─── Animated Dark Gradient Background (Deep charcoal-orange theme) ─────────
 
@@ -589,6 +591,15 @@ class _PulsingDotState extends State<PulsingDot>
 // ─── Login Screen ───────────────────────────────────────────────────────────
 
 class LoginScreen extends StatefulWidget {
+  const LoginScreen({
+    super.key,
+    this.googleAuthService,
+    this.onGoogleAuthenticated,
+  });
+
+  final ProviderGoogleAuthService? googleAuthService;
+  final ValueChanged<ProviderGoogleSession>? onGoogleAuthenticated;
+
   @override
   _LoginScreenState createState() => _LoginScreenState();
 }
@@ -599,6 +610,9 @@ class _LoginScreenState extends State<LoginScreen>
   final _passwordController = TextEditingController();
 
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
+  late final _googleAuth =
+      widget.googleAuthService ?? ProviderGoogleAuthService();
   bool _isPasswordVisible = false;
 
   // Staggered entrance animation
@@ -649,6 +663,7 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _login() async {
+    if (_isLoading) return;
     final email = _emailController.text.trim();
     final password = _passwordController.text;
 
@@ -745,6 +760,44 @@ class _LoginScreenState extends State<LoginScreen>
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
+    }
+  }
+
+  Future<void> _loginWithGoogle() async {
+    if (_isLoading) return;
+    setState(() {
+      _isLoading = true;
+      _isGoogleLoading = true;
+    });
+    try {
+      final session = await authenticateProviderWithGoogle(
+          context: context, service: _googleAuth, intent: 'login');
+      if (session == null || !mounted) return;
+      await ApiService.saveToken(session.accessToken);
+      if (!mounted) return;
+      if (widget.onGoogleAuthenticated != null) {
+        widget.onGoogleAuthenticated!(session);
+      } else {
+        Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+                builder: (_) => DashboardScreen(token: session.accessToken)));
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(error is ProviderGoogleAuthException
+            ? error.message
+            : 'Google sign-in failed. Please try again.'),
+        backgroundColor: Colors.redAccent,
+      ));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isGoogleLoading = false;
+        });
+      }
     }
   }
 
@@ -1081,9 +1134,8 @@ class _LoginScreenState extends State<LoginScreen>
                       _staggeredItem(
                         4,
                         GestureDetector(
-                          onTap: () {
-                            debugPrint("Google Sign In clicked");
-                          },
+                          key: const Key('provider-google-login'),
+                          onTap: _isLoading ? null : _loginWithGoogle,
                           child: Container(
                             width: double.infinity,
                             height: 56,
@@ -1117,7 +1169,9 @@ class _LoginScreenState extends State<LoginScreen>
                                 ),
                                 const SizedBox(width: 14),
                                 Text(
-                                  'Continue with Google',
+                                  _isGoogleLoading
+                                      ? 'Signing in with Google…'
+                                      : 'Continue with Google',
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,

@@ -1,19 +1,36 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan, QueryFailedError } from 'typeorm';
+import { Repository, MoreThan, QueryFailedError, IsNull, Raw } from 'typeorm';
 import { isEmail } from 'class-validator';
 import { AdmUser, AdmUserRole } from '@app/common/entities/adm-user.entity';
 import { ProviderUser, ProviderUserRole } from '@app/common/entities/provider-user.entity';
 import { CustUser, CustUserRole } from '@app/common/entities/cust-user.entity';
-import { MechanicProfile } from '@app/common/entities/mechanic-profile.entity';
+import { MechanicProfile, KycStatus } from '@app/common/entities/mechanic-profile.entity';
+import { OAuth2Client } from 'google-auth-library';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import * as nodemailer from 'nodemailer';
 
+export interface GoogleAuthenticationRequest {
+  idToken: string;
+  accountType: 'CUSTOMER' | 'PROVIDER';
+  intent: 'login' | 'signup';
+  phoneNumber?: string;
+  providerType?: 'Mechanic' | 'Towing Fleet';
+  linkPassword?: string;
+}
+
+interface VerifiedGoogleIdentity {
+  subject: string;
+  email: string;
+  name: string;
+}
+
 @Injectable()
 export class AuthService {
   private transporter: nodemailer.Transporter;
+  private readonly googleClient = new OAuth2Client();
 
   constructor(
     @InjectRepository(AdmUser) private admUserRepository: Repository<AdmUser>,
@@ -29,6 +46,155 @@ export class AuthService {
         pass: process.env.SMTP_PASSWORD, 
       },
     });
+  }
+
+  async googleAuthentication(body: unknown) {
+    const data = this.googleRequest(body);
+    const identity = await this.verifyGoogleIdentity(data.idToken);
+    // Customer and Provider identities deliberately live in separate tables.
+    // Neither a client role claim nor an administrator email can grant admin access.
+    const repository: Repository<CustUser | ProviderUser> = data.accountType === 'CUSTOMER'
+      ? this.custUserRepository as Repository<CustUser | ProviderUser>
+      : this.providerUserRepository as Repository<CustUser | ProviderUser>;
+    const linked = await repository.findOneBy({ googleSubject: identity.subject });
+    if (linked) return this.googleSession(linked, data.accountType);
+
+    // Older password registrations did not normalize email case. Compare safely
+    // without LIKE wildcards and refuse ambiguous historical duplicates.
+    const matches = await repository.find({
+      where: { email: Raw(alias => `LOWER(${alias}) = :googleEmail`, { googleEmail: identity.email }) },
+      take: 2,
+    });
+    if (matches.length > 1) {
+      throw new ConflictException({ code: 'ACCOUNT_EMAIL_AMBIGUOUS', message: 'More than one existing account uses this email. Contact support before linking Google.' });
+    }
+    if (matches[0]) {
+      const existing = matches[0];
+      if (existing.googleSubject) {
+        throw this.googleLinkConflict();
+      }
+      if (!data.linkPassword) {
+        throw new ConflictException({ code: 'ACCOUNT_LINK_REQUIRED', message: 'Enter the existing QuickMechanic password to link this Google account.' });
+      }
+      if (!await bcrypt.compare(data.linkPassword, existing.passwordHash)) {
+        throw new UnauthorizedException({ code: 'ACCOUNT_LINK_PASSWORD_INVALID', message: 'The existing account password is incorrect.' });
+      }
+      try {
+        // Password proof and an unlinked identity must still hold when the update
+        // occurs. A concurrent link or password reset cannot be overwritten.
+        const changed = await repository.update({
+          id: existing.id, email: existing.email, googleSubject: IsNull(), passwordHash: existing.passwordHash,
+        }, { googleSubject: identity.subject });
+        if (!changed.affected) {
+          const current = await repository.findOneBy({ id: existing.id });
+          if (current?.googleSubject === identity.subject) {
+            return this.googleSession(current, data.accountType);
+          }
+          throw this.googleLinkConflict();
+        }
+      } catch (error) {
+        if (this.isUniqueViolation(error)) throw this.googleLinkConflict();
+        throw error;
+      }
+      existing.googleSubject = identity.subject;
+      return this.googleSession(existing, data.accountType);
+    }
+    if (data.intent === 'login') {
+      throw new NotFoundException({ code: 'GOOGLE_ACCOUNT_NOT_REGISTERED', message: 'No account is registered for this Google identity. Create an account first.' });
+    }
+
+    const phoneNumber = data.phoneNumber?.trim() ?? '';
+    if (!/^\+?[1-9]\d{9,14}$/.test(phoneNumber) || identity.name.length < 2 || identity.name.length > 200) {
+      throw new BadRequestException('A valid 10 to 15 digit mobile number and a name from Google are required');
+    }
+    if (data.accountType === 'PROVIDER' && !['Mechanic', 'Towing Fleet'].includes(data.providerType ?? '')) {
+      throw new BadRequestException('Choose Mechanic or Towing Fleet for a new provider account');
+    }
+    // Google-only signups have no guessable temporary or preset password.
+    const passwordHash = await bcrypt.hash(crypto.randomBytes(48).toString('base64url'), 12);
+    const attributes = {
+      email: identity.email, name: identity.name, googleSubject: identity.subject,
+      phoneNumber, passwordHash,
+    };
+    const user = data.accountType === 'CUSTOMER'
+      ? this.custUserRepository.create({ ...attributes, role: CustUserRole.CUSTOMER })
+      : this.providerUserRepository.create({ ...attributes,
+        role: data.providerType === 'Towing Fleet' ? ProviderUserRole.FLEET_DRIVER : ProviderUserRole.MECHANIC });
+    try {
+      if (data.accountType === 'PROVIDER') {
+        await this.providerUserRepository.manager.transaction(async manager => {
+          await manager.getRepository(ProviderUser).save(user as ProviderUser);
+          const profiles = manager.getRepository(MechanicProfile);
+          await profiles.save(profiles.create({
+            user: user as ProviderUser, kycStatus: KycStatus.PENDING,
+            kycDocumentsVerified: false, isOnline: false,
+          }));
+        });
+      } else {
+        await repository.save(user);
+      }
+    } catch (error) {
+      if (this.isUniqueViolation(error)) {
+        throw new ConflictException({ code: 'GOOGLE_SIGN_UP_CONFLICT', message: 'An account already uses this Google identity, email or mobile number. Sign in or contact support.' });
+      }
+      throw error;
+    }
+    return this.googleSession(user, data.accountType);
+  }
+
+  private googleRequest(body: unknown): GoogleAuthenticationRequest {
+    if (!body || typeof body !== 'object') throw new BadRequestException('Invalid Google authentication request');
+    const data = body as Partial<GoogleAuthenticationRequest>;
+    if (typeof data.idToken !== 'string' || !data.idToken.trim() || data.idToken.length > 16384 ||
+        !['CUSTOMER', 'PROVIDER'].includes(data.accountType ?? '') ||
+        !['login', 'signup'].includes(data.intent ?? '') ||
+        (data.phoneNumber !== undefined && typeof data.phoneNumber !== 'string') ||
+        (data.providerType !== undefined && !['Mechanic', 'Towing Fleet'].includes(data.providerType)) ||
+        (data.linkPassword !== undefined && (typeof data.linkPassword !== 'string' || data.linkPassword.length > 256))) {
+      throw new BadRequestException('A Google ID token, Customer or Provider account type, and login or signup intent are required');
+    }
+    return data as GoogleAuthenticationRequest;
+  }
+
+  private async verifyGoogleIdentity(idToken: string): Promise<VerifiedGoogleIdentity> {
+    const audience = process.env.GOOGLE_WEB_CLIENT_ID?.trim();
+    if (!audience) {
+      throw new ServiceUnavailableException({ code: 'GOOGLE_SIGN_IN_NOT_CONFIGURED', message: 'Google sign-in is not configured on this server.' });
+    }
+    try {
+      // The official verifier checks Google's signature, issuer, expiry and audience.
+      const ticket = await this.googleClient.verifyIdToken({ idToken, audience });
+      const payload = ticket.getPayload();
+      if (!payload || payload.aud !== audience || payload.email_verified !== true ||
+          typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 255 || payload.sub.trim() !== payload.sub ||
+          typeof payload.email !== 'string' || !isEmail(payload.email)) {
+        throw new Error('Invalid Google identity claims');
+      }
+      return {
+        subject: payload.sub, email: payload.email.trim().toLowerCase(),
+        name: typeof payload.name === 'string' ? payload.name.trim() : '',
+      };
+    } catch (_) {
+      throw new UnauthorizedException({ code: 'GOOGLE_TOKEN_INVALID', message: 'Google sign-in could not be verified. Please sign in with Google again.' });
+    }
+  }
+
+  private async googleSession(user: CustUser | ProviderUser, accountType: 'CUSTOMER' | 'PROVIDER') {
+    const allowedRoles = accountType === 'CUSTOMER' ? [CustUserRole.CUSTOMER]
+      : [ProviderUserRole.MECHANIC, ProviderUserRole.FLEET_DRIVER];
+    if (!(allowedRoles as string[]).includes(user.role)) throw new ForbiddenException('This account cannot use Google sign-in for the selected app');
+    return {
+      accessToken: await this.jwtService.signAsync({ sub: user.id, email: user.email, role: user.role }),
+      role: user.role,
+    };
+  }
+
+  private googleLinkConflict() {
+    return new ConflictException({ code: 'ACCOUNT_LINK_CONFLICT', message: 'This account or Google identity has already been linked. Sign in again or contact support.' });
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    return error instanceof QueryFailedError && (error.driverError as { code?: string }).code === '23505';
   }
 
   async registerCustomer(data: any) {

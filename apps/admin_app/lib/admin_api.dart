@@ -2,13 +2,18 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class AdminApi {
   AdminApi({required this.token});
   final String token;
-  static const String baseUrl = String.fromEnvironment(
-    'API_BASE_URL', defaultValue: 'http://127.0.0.1:3000');
+  static const String _apiOverride = String.fromEnvironment('API_BASE_URL');
+  static String get baseUrl => _apiOverride.isNotEmpty
+      ? _apiOverride
+      : kReleaseMode
+          ? 'https://quickmechanic-api-x6f6mkpywq-uc.a.run.app'
+          : 'http://127.0.0.1:3000';
 
   static Future<Map<String, dynamic>> login(String email, String password) async {
     late http.Response response;

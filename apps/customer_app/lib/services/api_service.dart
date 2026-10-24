@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -96,6 +98,80 @@ class ApiService {
       }
     } catch (e) {
       return {'success': false, 'message': 'Network Error: $e'};
+    }
+  }
+
+  /// The server verifies Google's identity token before issuing our session.
+  /// Name and email deliberately come from the verified token, not the client.
+  static Future<Map<String, dynamic>> googleAuthenticate({
+    required String idToken,
+    required String intent,
+    String? phoneNumber,
+    String? linkPassword,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/auth/google'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'idToken': idToken,
+              'accountType': 'CUSTOMER',
+              'intent': intent,
+              if (phoneNumber != null) 'phoneNumber': phoneNumber.trim(),
+              if (linkPassword != null) 'linkPassword': linkPassword,
+            }),
+          )
+          .timeout(const Duration(seconds: 25));
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Invalid authentication response');
+      }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final session = decoded['accessToken'] ?? decoded['access_token'];
+        if (decoded['role'] != 'CUSTOMER' ||
+            session is! String ||
+            session.isEmpty) {
+          return {
+            'success': false,
+            'message':
+                'Google sign-in did not return a Customer session. Please try again.',
+          };
+        }
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('customer_jwt', session);
+        token = session;
+        return {'success': true, 'data': decoded};
+      }
+      final serverMessage = kReleaseMode &&
+              decoded['code'] == 'GOOGLE_SIGN_IN_NOT_CONFIGURED'
+          ? 'Google sign-in is not available yet. Please use email and password.'
+          : decoded['message'];
+      return {
+        'success': false,
+        'code': decoded['code'],
+        'message': serverMessage is String
+            ? serverMessage
+            : 'Google sign-in could not be completed. Please try again.',
+      };
+    } on TimeoutException {
+      return {
+        'success': false,
+        'message':
+            'Google sign-in timed out. Check your connection and try again.',
+      };
+    } on FormatException {
+      return {
+        'success': false,
+        'message':
+            'The server returned an invalid sign-in response. Please try again.',
+      };
+    } catch (_) {
+      return {
+        'success': false,
+        'message':
+            'Google sign-in could not connect. Check your connection and try again.',
+      };
     }
   }
 

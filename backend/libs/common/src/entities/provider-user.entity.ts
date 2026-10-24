@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
 export enum ProviderUserRole {
   MECHANIC = 'MECHANIC',
@@ -15,6 +15,10 @@ export class ProviderUser {
 
   @Column({ unique: true })
   email: string;
+
+  @Index('UQ_PROVIDER_USER_googleSubject', { unique: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  googleSubject: string | null;
 
   @Column()
   passwordHash: string;

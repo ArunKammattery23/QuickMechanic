@@ -11,10 +11,10 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: SupportScreen(token: 'test-token')));
       await tester.pumpAndSettle();
       expect(find.text('WAITING FOR USER'), findsOneWidget);
-      await tester.enterText(find.widgetWithText(TextField, 'Ask a question'), 'How do I check my job?');
+      await tester.enterText(find.widgetWithText(TextField, 'Ask a question'), 'Where can I find opening hours?');
       await tester.tap(find.text('Ask guide'));
       await tester.pumpAndSettle();
-      expect(find.text('Guide answer'), findsOneWidget);
+      expect(find.text('SUPPORT GUIDE'), findsOneWidget);
       expect(find.text('Check the active job.'), findsOneWidget);
     }, () => MockClient((request) async {
       if (request.url.path == '/support/bot') {
@@ -59,7 +59,7 @@ void main() {
       await tester.ensureVisible(find.text('Submit ticket'));
       await tester.tap(find.text('Submit ticket'));
       await tester.pumpAndSettle();
-      expect(find.text('Support ticket'), findsOneWidget);
+      expect(find.text('Support conversation'), findsOneWidget);
       expect(find.text('Route problem'), findsOneWidget);
       expect(find.text('OPEN'), findsOneWidget);
       expect(find.text('The route does not update'), findsOneWidget);

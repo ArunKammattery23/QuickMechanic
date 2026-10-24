@@ -19,6 +19,7 @@ import '../services/background_service.dart';
 import '../services/api_service.dart';
 import '../services/call_service.dart';
 import 'package:vibration/vibration.dart';
+import 'package:permission_handler/permission_handler.dart' as permissions;
 
 enum JobState { idle, accepted, enRoute }
 
@@ -37,7 +38,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool isOnline = false;
   bool _incomingVisible = false;
   final Set<String> _seenRequests = {};
-  late String mechanicId;
+  String mechanicId = 'unknown';
 
   List<dynamic> _availableServices = [];
   List<dynamic> _availableVehicles = [];
@@ -105,7 +106,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (parts.length == 3) {
         final payload = json.decode(
             utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
-        mechanicId = payload['sub'];
+        final subject = payload['sub'];
+        if (subject is String && subject.isNotEmpty) mechanicId = subject;
       }
     } catch (e) {
       mechanicId = 'unknown';
@@ -265,6 +267,36 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.dispose();
   }
 
+  Future<bool> _confirmBackgroundLocationDisclosure() async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('Keep your location updated while online'),
+            content: const Text(
+              'QuickMechanic Provider collects your precise location while you '
+              'are online, including when the app is closed or not in use. This '
+              'lets nearby customers see an available mechanic, helps dispatch '
+              'service requests, and keeps your position current during an active '
+              'job. A persistent notification is shown while location sharing is '
+              'active. Go Offline at any time to stop sharing.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Not now'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Continue'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
   Future<Position?> _determinePosition() async {
     bool serviceEnabled;
     LocationPermission permission;
@@ -294,6 +326,23 @@ class _DashboardScreenState extends State<DashboardScreen>
       return null;
     }
 
+    if (await permissions.Permission.locationAlways.isDenied) {
+      final backgroundStatus =
+          await permissions.Permission.locationAlways.request();
+      if (!backgroundStatus.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Choose "Allow all the time" so customers can find you while you are online.',
+              ),
+            ),
+          );
+        }
+        return null;
+      }
+    }
+
     return await Geolocator.getCurrentPosition();
   }
 
@@ -317,6 +366,10 @@ class _DashboardScreenState extends State<DashboardScreen>
     double? lng;
 
     if (newStatus) {
+      if (!await _confirmBackgroundLocationDisclosure()) {
+        _changingStatus = false;
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Acquiring GPS location...')));
       final position =

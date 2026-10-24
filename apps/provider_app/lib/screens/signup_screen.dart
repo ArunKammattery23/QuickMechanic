@@ -4,8 +4,21 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'login_screen.dart';
 import '../config/api_config.dart';
+import 'dashboard_screen.dart';
+import '../services/api_service.dart';
+import '../services/google_auth_service.dart';
+import '../widgets/google_auth_dialogs.dart';
 
 class SignupScreen extends StatefulWidget {
+  const SignupScreen({
+    super.key,
+    this.googleAuthService,
+    this.onGoogleAuthenticated,
+  });
+
+  final ProviderGoogleAuthService? googleAuthService;
+  final ValueChanged<ProviderGoogleSession>? onGoogleAuthenticated;
+
   @override
   _SignupScreenState createState() => _SignupScreenState();
 }
@@ -17,9 +30,13 @@ class _SignupScreenState extends State<SignupScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
+  late final _googleAuth =
+      widget.googleAuthService ?? ProviderGoogleAuthService();
   bool _isPasswordVisible = false;
 
   Future<void> _signup() async {
+    if (_isLoading) return;
     final name = _nameController.text.trim();
     final phone = _phoneController.text.trim();
     final email = _emailController.text.trim();
@@ -83,6 +100,69 @@ class _SignupScreenState extends State<SignupScreen> {
             content: Text('Network error. Is the backend running?'),
             backgroundColor: Colors.redAccent),
       );
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _signupWithGoogle() async {
+    if (_isLoading) return;
+    setState(() {
+      _isLoading = true;
+      _isGoogleLoading = true;
+    });
+    try {
+      var phone = _phoneController.text.trim();
+      if (!isValidProviderMobile(phone)) {
+        final enteredPhone = await collectProviderGoogleMobile(context, phone);
+        if (enteredPhone == null || !mounted) return;
+        phone = enteredPhone;
+        _phoneController.text = phone;
+      }
+      final session = await authenticateProviderWithGoogle(
+        context: context,
+        service: _googleAuth,
+        intent: 'signup',
+        phoneNumber: phone,
+        providerType: _userType,
+      );
+      if (session == null || !mounted) return;
+      await ApiService.saveToken(session.accessToken);
+      if (!mounted) return;
+      if (widget.onGoogleAuthenticated != null) {
+        widget.onGoogleAuthenticated!(session);
+      } else {
+        Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+                builder: (_) => DashboardScreen(token: session.accessToken)),
+            (_) => false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Account created. Complete KYC before accepting service requests.'),
+        ));
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(error is ProviderGoogleAuthException
+            ? error.message
+            : 'Google sign-up failed. Please try again.'),
+        backgroundColor: Colors.redAccent,
+      ));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isGoogleLoading = false;
+        });
+      }
     }
   }
 
@@ -211,7 +291,7 @@ class _SignupScreenState extends State<SignupScreen> {
                           width: double.infinity,
                           height: 56,
                           child: ElevatedButton(
-                            onPressed: _signup,
+                            onPressed: _isLoading ? null : _signup,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.blueAccent,
                               foregroundColor: Colors.white,
@@ -262,14 +342,15 @@ class _SignupScreenState extends State<SignupScreen> {
                           width: double.infinity,
                           height: 56,
                           child: ElevatedButton.icon(
-                            onPressed: () {
-                              print("Google Sign Up clicked as $_userType");
-                            },
+                            key: const Key('provider-google-signup'),
+                            onPressed: _isLoading ? null : _signupWithGoogle,
                             icon: const Icon(Icons.g_mobiledata,
                                 size: 36, color: Colors.blue),
-                            label: const Text(
-                              'Sign up with Google',
-                              style: TextStyle(
+                            label: Text(
+                              _isGoogleLoading
+                                  ? 'Signing up with Google…'
+                                  : 'Sign up with Google',
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.black87,
@@ -286,6 +367,13 @@ class _SignupScreenState extends State<SignupScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
+                        Text(
+                          'For Google sign-up, choose your provider type and add your mobile number. Google supplies your name and email; no password is needed.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 12),
+                        ),
                       ],
                     ),
                   ),

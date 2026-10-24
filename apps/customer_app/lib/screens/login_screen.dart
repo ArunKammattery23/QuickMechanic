@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'signup_screen.dart';
 import 'home_screen.dart';
 import '../services/api_service.dart';
+import '../services/google_auth_service.dart';
+import 'google_auth_flow.dart';
 
 // ─── Animated Gradient Background with Floating Particles ───────────────────
 
@@ -512,6 +514,11 @@ class _AnimatedGradientButtonState extends State<AnimatedGradientButton>
 // ─── Login Screen ───────────────────────────────────────────────────────────
 
 class LoginScreen extends StatefulWidget {
+  const LoginScreen(
+      {super.key,
+      this.googleTokenProvider = const NativeGoogleTokenProvider()});
+  final GoogleTokenProvider googleTokenProvider;
+
   @override
   _LoginScreenState createState() => _LoginScreenState();
 }
@@ -573,6 +580,7 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   void _login() async {
+    if (_isLoading) return;
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -595,6 +603,7 @@ class _LoginScreenState extends State<LoginScreen>
       _passwordController.text,
     );
 
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
     });
@@ -623,6 +632,45 @@ class _LoginScreenState extends State<LoginScreen>
         ),
       );
     }
+  }
+
+  Future<void> _googleLogin() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+    final result = await GoogleAuthFlow.authenticate(
+      context,
+      intent: GoogleAuthIntent.login,
+      tokenProvider: widget.googleTokenProvider,
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (result['cancelled'] == true) return;
+    if (result['success'] == true) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (_) => false,
+      );
+      return;
+    }
+    final needsSignup = result['code'] == 'GOOGLE_ACCOUNT_NOT_REGISTERED';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(needsSignup
+          ? 'This Google account has not registered yet. Use Sign up with Google.'
+          : result['message'] as String),
+      action: needsSignup
+          ? SnackBarAction(
+              key: const ValueKey('customer-google-signup-action'),
+              label: 'Sign up',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => SignupScreen(
+                          googleTokenProvider: widget.googleTokenProvider,
+                        )),
+              ),
+            )
+          : null,
+    ));
   }
 
   Widget _staggeredItem(int index, Widget child) {
@@ -898,9 +946,8 @@ class _LoginScreenState extends State<LoginScreen>
                       _staggeredItem(
                         4,
                         GestureDetector(
-                          onTap: () {
-                            print("Google Sign In clicked");
-                          },
+                          key: const ValueKey('customer-google-login'),
+                          onTap: _isLoading ? null : _googleLogin,
                           child: Container(
                             width: double.infinity,
                             height: 56,
@@ -934,7 +981,9 @@ class _LoginScreenState extends State<LoginScreen>
                                 ),
                                 const SizedBox(width: 14),
                                 Text(
-                                  'Continue with Google',
+                                  _isLoading
+                                      ? 'Connecting…'
+                                      : 'Continue with Google',
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
@@ -959,7 +1008,9 @@ class _LoginScreenState extends State<LoginScreen>
                               PageRouteBuilder(
                                 pageBuilder:
                                     (context, animation, secondaryAnimation) =>
-                                        SignupScreen(),
+                                        SignupScreen(
+                                            googleTokenProvider:
+                                                widget.googleTokenProvider),
                                 transitionsBuilder: (context, animation,
                                     secondaryAnimation, child) {
                                   return FadeTransition(

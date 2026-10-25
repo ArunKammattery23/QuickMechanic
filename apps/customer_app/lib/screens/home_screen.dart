@@ -91,6 +91,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Services come from the backend by name, so pick a matching icon and
+  // accent colour from keywords in the name.
+  static Map<String, dynamic> _serviceStyle(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('tyre') || n.contains('tire') || n.contains('puncture'))
+      return {'icon': Icons.tire_repair, 'color': Colors.orangeAccent};
+    if (n.contains('battery') || n.contains('jump'))
+      return {'icon': Icons.battery_charging_full, 'color': Colors.greenAccent};
+    if (n.contains('tow'))
+      return {'icon': Icons.local_shipping, 'color': Colors.amberAccent};
+    if (n.contains('fuel') || n.contains('petrol') || n.contains('diesel'))
+      return {'icon': Icons.local_gas_station, 'color': Colors.redAccent};
+    if (n.contains('lock') || n.contains('key'))
+      return {'icon': Icons.vpn_key, 'color': Colors.purpleAccent};
+    if (n.contains('engine'))
+      return {'icon': Icons.car_repair, 'color': Colors.deepOrangeAccent};
+    if (n.contains('mechanical') || n.contains('repair'))
+      return {'icon': Icons.build, 'color': Colors.lightBlueAccent};
+    if (n.contains('unknown') || n.contains('other'))
+      return {'icon': Icons.help_outline, 'color': Colors.tealAccent};
+    return {'icon': Icons.miscellaneous_services, 'color': Colors.blueAccent};
+  }
+
   Future<void> _loadServices() async {
     try {
       final response = await http
@@ -103,8 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
             .map((s) => <String, dynamic>{
                   'id': s['name'],
                   'name': s['name'],
-                  'icon': Icons.build,
-                  'color': Colors.blueAccent
+                  ..._serviceStyle(s['name'] as String),
                 })
             .toList();
         _servicesError = null;
@@ -248,11 +270,11 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             IconButton(
                 tooltip: 'Resume active job',
-                icon: const Icon(Icons.restore),
+                icon: const Icon(Icons.near_me),
                 onPressed: _restoreJob),
             IconButton(
                 tooltip: 'Wallet & job history',
-                icon: const Icon(Icons.history),
+                icon: const Icon(Icons.receipt_long),
                 onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -272,7 +294,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         body: Stack(
           children: [
-            Padding(
+            // SafeArea keeps the request button above the phone's nav bar.
+            SafeArea(
+              top: false,
+              child: Padding(
               padding:
                   const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
               child: Column(
@@ -337,16 +362,25 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(
-                                  service['icon'],
-                                  size: 48,
-                                  color: isSelected
-                                      ? service['color']
-                                      : Colors.white70,
+                                Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: (service['color'] as Color)
+                                        .withOpacity(isSelected ? 0.3 : 0.14),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    service['icon'],
+                                    size: 34,
+                                    color: service['color'],
+                                  ),
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
                                   service['name'],
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     color: isSelected
                                         ? Colors.white
@@ -407,7 +441,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-            ),
+            )),
             if (_isRequesting)
               Positioned.fill(
                 child: ClipRRect(

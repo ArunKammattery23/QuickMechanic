@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui';
 import 'dart:math' as math;
 import 'dart:convert';
@@ -620,9 +622,22 @@ class _LoginScreenState extends State<LoginScreen>
   late List<Animation<double>> _fadeAnimations;
   late List<Animation<Offset>> _slideAnimations;
 
+  static const _lastUserKey = 'provider_last_user';
+
+  // Prefill whoever signed in last so only the password (or the phone's
+  // saved-password suggestion) is needed.
+  Future<void> _prefillLastUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final last = prefs.getString(_lastUserKey);
+    if (last != null && mounted && _emailController.text.isEmpty) {
+      _emailController.text = last;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _prefillLastUser();
     _entranceController = AnimationController(
       duration: const Duration(milliseconds: 2000),
       vsync: this,
@@ -689,9 +704,12 @@ class _LoginScreenState extends State<LoginScreen>
           .post(
             Uri.parse('${ApiConfig.baseUrl}/auth/login'),
             headers: {'Content-Type': 'application/json'},
+            // accountType keeps a phone shared with a customer account from
+            // resolving to the customer instead of this provider.
             body: jsonEncode({
-              'email': email,
+              'identifier': email,
               'password': password,
+              'accountType': 'PROVIDER',
             }),
           )
           .timeout(const Duration(seconds: 10));
@@ -730,6 +748,10 @@ class _LoginScreenState extends State<LoginScreen>
         );
 
         await ApiService.saveToken(token);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_lastUserKey, email);
+        // Lets the phone's password manager offer to save this login.
+        TextInput.finishAutofillContext();
 
         Navigator.pushReplacement(
           context,
@@ -980,11 +1002,18 @@ class _LoginScreenState extends State<LoginScreen>
                                   ),
                                   const SizedBox(height: 28),
 
-                                  // Email Field
+                                  // Grouped so the phone's password manager
+                                  // can save and fill both fields together.
+                                  AutofillGroup(
+                                      child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
                                   _buildGlassTextField(
                                     controller: _emailController,
                                     hintText: 'Username, email or mobile',
                                     icon: Icons.alternate_email_rounded,
+                                    autofillHints: const [AutofillHints.username],
                                   ),
                                   const SizedBox(height: 16),
 
@@ -993,6 +1022,7 @@ class _LoginScreenState extends State<LoginScreen>
                                     controller: _passwordController,
                                     hintText: 'Password',
                                     icon: Icons.lock_outline_rounded,
+                                    autofillHints: const [AutofillHints.password],
                                     obscureText: !_isPasswordVisible,
                                     suffixIcon: IconButton(
                                       icon: Icon(
@@ -1010,6 +1040,7 @@ class _LoginScreenState extends State<LoginScreen>
                                       },
                                     ),
                                   ),
+                                  ])),
                                   const SizedBox(height: 8),
 
                                   // Forgot Password
@@ -1258,6 +1289,7 @@ class _LoginScreenState extends State<LoginScreen>
     required IconData icon,
     bool obscureText = false,
     Widget? suffixIcon,
+    Iterable<String>? autofillHints,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -1273,6 +1305,7 @@ class _LoginScreenState extends State<LoginScreen>
       child: TextField(
         controller: controller,
         obscureText: obscureText,
+        autofillHints: autofillHints,
         style: const TextStyle(
           color: Colors.white,
           fontSize: 15,

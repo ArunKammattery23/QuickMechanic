@@ -29,7 +29,9 @@ import { WsJwtGuard } from './guards/ws-jwt.guard';
         }
         return {
           secret: secret || 'super-secret-key-change-in-prod',
-          signOptions: { expiresIn: '7d' as const },
+          // Apps keep users signed in until they tap Sign out; a month avoids
+          // surprise sign-outs for people who open the app occasionally.
+          signOptions: { expiresIn: '30d' as const },
         };
       },
     }),

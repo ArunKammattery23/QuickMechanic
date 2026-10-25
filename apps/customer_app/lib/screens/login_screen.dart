@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui';
 import 'dart:math' as math;
 import 'signup_screen.dart';
@@ -536,9 +538,22 @@ class _LoginScreenState extends State<LoginScreen>
   late List<Animation<double>> _fadeAnimations;
   late List<Animation<Offset>> _slideAnimations;
 
+  static const _lastUserKey = 'customer_last_user';
+
+  // Prefill whoever signed in last so only the password (or the phone's
+  // saved-password suggestion) is needed.
+  Future<void> _prefillLastUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final last = prefs.getString(_lastUserKey);
+    if (last != null && mounted && _emailController.text.isEmpty) {
+      _emailController.text = last;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _prefillLastUser();
     _entranceController = AnimationController(
       duration: const Duration(milliseconds: 1800),
       vsync: this,
@@ -609,6 +624,11 @@ class _LoginScreenState extends State<LoginScreen>
     });
 
     if (result['success']) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lastUserKey, _emailController.text.trim());
+      // Lets the phone's password manager offer to save this login.
+      TextInput.finishAutofillContext();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text('Login Successful!'),
@@ -814,11 +834,18 @@ class _LoginScreenState extends State<LoginScreen>
                                   ),
                                   const SizedBox(height: 28),
 
-                                  // Email Field
+                                  // Grouped so the phone's password manager
+                                  // can save and fill both fields together.
+                                  AutofillGroup(
+                                      child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
                                   _buildGlassTextField(
                                     controller: _emailController,
                                     hintText: 'Username, email or mobile',
                                     icon: Icons.alternate_email_rounded,
+                                    autofillHints: const [AutofillHints.username],
                                   ),
                                   const SizedBox(height: 16),
 
@@ -827,6 +854,7 @@ class _LoginScreenState extends State<LoginScreen>
                                     controller: _passwordController,
                                     hintText: 'Password',
                                     icon: Icons.lock_outline_rounded,
+                                    autofillHints: const [AutofillHints.password],
                                     obscureText: _obscurePassword,
                                     suffixIcon: IconButton(
                                       icon: Icon(
@@ -843,6 +871,7 @@ class _LoginScreenState extends State<LoginScreen>
                                       },
                                     ),
                                   ),
+                                  ])),
                                   const SizedBox(height: 10),
 
                                   // Forgot Password
@@ -1072,6 +1101,7 @@ class _LoginScreenState extends State<LoginScreen>
     required IconData icon,
     bool obscureText = false,
     Widget? suffixIcon,
+    Iterable<String>? autofillHints,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -1087,6 +1117,7 @@ class _LoginScreenState extends State<LoginScreen>
       child: TextField(
         controller: controller,
         obscureText: obscureText,
+        autofillHints: autofillHints,
         style: const TextStyle(
           color: Colors.white,
           fontSize: 15,

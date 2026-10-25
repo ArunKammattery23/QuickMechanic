@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'admin_api.dart';
 import 'support_tab.dart';
 import 'kyc_tab.dart';
@@ -44,7 +47,36 @@ class _AdminGateState extends State<AdminGate> {
   String? _role, _error;
   bool _busy = false;
   int _tab = 0;
+  bool _restoring = true;
   @override void dispose() { _email.dispose(); _password.dispose(); super.dispose(); }
+
+  static const _tokenKey = 'admin_jwt', _roleKey = 'admin_role', _userKey = 'admin_last_user';
+  static const _adminRoles = ['SUPER_ADMIN', 'MANAGER', 'CEO'];
+
+  @override void initState() { super.initState(); _restore(); }
+
+  // Reopen straight into the console while the saved session is unexpired;
+  // the username field is prefilled either way.
+  Future<void> _restore() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _email.text = prefs.getString(_userKey) ?? '';
+      final token = prefs.getString(_tokenKey), role = prefs.getString(_roleKey);
+      if (token != null && _adminRoles.contains(role) && _unexpired(token)) {
+        _api = AdminApi(token: token); _role = role;
+      } else if (token != null) {
+        await prefs.remove(_tokenKey); await prefs.remove(_roleKey);
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _restoring = false);
+  }
+
+  static bool _unexpired(String token) {
+    try {
+      final payload = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(token.split('.')[1]))));
+      return (payload['exp'] as num) * 1000 > DateTime.now().millisecondsSinceEpoch;
+    } catch (_) { return false; }
+  }
 
   Future<void> _login() async {
     if (_busy || _email.text.trim().isEmpty || _password.text.isEmpty) return;
@@ -56,12 +88,38 @@ class _AdminGateState extends State<AdminGate> {
       if (!['SUPER_ADMIN','MANAGER','CEO'].contains(role) || token == null || token.isEmpty) {
         throw Exception('This account does not have admin app access');
       }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_tokenKey, token);
+      await prefs.setString(_roleKey, role!);
+      await prefs.setString(_userKey, _email.text.trim());
+      // Lets the phone's password manager offer to save this login.
+      TextInput.finishAutofillContext();
       if (mounted) setState(() { _api = AdminApi(token: token); _role = role; _password.clear(); _tab = 0; });
     } catch (error) { if (mounted) setState(() => _error = error.toString().replaceFirst('Exception: ', '')); }
     finally { if (mounted) setState(() => _busy = false); }
   }
 
+  // Only an explicit sign-out (or password change) forgets the saved session.
+  Future<void> _clearSession() async {
+    setState(() { _api = null; _role = null; _tab = 0; });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tokenKey); await prefs.remove(_roleKey);
+  }
+
+  Future<void> _confirmSignOut() async {
+    final ok = await showDialog<bool>(context: context, builder: (dialog) => AlertDialog(
+      title: const Text('Sign out?'),
+      content: const Text('You will need your username and password to sign in again.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Sign out')),
+      ],
+    ));
+    if (ok == true && mounted) _clearSession();
+  }
+
   @override Widget build(BuildContext context) {
+    if (_restoring) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     if (_api == null) {
       return Scaffold(
       body: Container(decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF10374A), AdminColors.background, Color(0xFF071624)])), child: SafeArea(child: Center(child: SingleChildScrollView(child: ConstrainedBox(
@@ -72,7 +130,7 @@ class _AdminGateState extends State<AdminGate> {
           const Text('QuickMechanic', style: TextStyle(color: Colors.white, fontSize: 29, fontWeight: FontWeight.w900, letterSpacing: -.5)),
           const Text('ADMIN CONSOLE', style: TextStyle(color: AdminColors.mint, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 3)),
           const SizedBox(height: 30),
-          AdminPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          AdminPanel(child: AutofillGroup(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             const Text('Welcome back', style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800)),
             const SizedBox(height: 5),
             const Text('Sign in to manage support, providers and payments.', style: TextStyle(color: AdminColors.muted, height: 1.4)),
@@ -83,7 +141,7 @@ class _AdminGateState extends State<AdminGate> {
             if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: const TextStyle(color: Color(0xFFFF8C86)))),
             const SizedBox(height: 22),
             FilledButton.icon(onPressed: _busy ? null : _login, icon: const Icon(Icons.arrow_forward_rounded), label: Text(_busy ? 'Signing in…' : 'Sign in securely')),
-          ])),
+          ]))),
           const SizedBox(height: 18),
           const Text('Authorized administrators only', style: TextStyle(color: AdminColors.muted, fontSize: 12)),
         ]))))))),
@@ -107,7 +165,8 @@ class _AdminGateState extends State<AdminGate> {
     return Scaffold(
       appBar: AppBar(title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('QUICKMECHANIC  /  ADMIN', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5, color: AdminColors.mint)), Text(items[_tab].title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800))]), actions: [
         IconButton(tooltip: 'Profile', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminProfileScreen(api: _api!))), icon: const Icon(Icons.account_circle_outlined)),
-        IconButton(tooltip: 'Settings', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminSettingsScreen(api: _api!, onSignOut: () => setState(() { _api = null; _role = null; _tab = 0; })))), icon: const Icon(Icons.settings_outlined)),
+        IconButton(tooltip: 'Settings', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminSettingsScreen(api: _api!, onSignOut: _clearSession))), icon: const Icon(Icons.settings_outlined)),
+        IconButton(tooltip: 'Sign out', onPressed: _confirmSignOut, icon: const Icon(Icons.logout_rounded)),
       ]),
       body: items[_tab].body,
       bottomNavigationBar: NavigationBar(selectedIndex: _tab, onDestinationSelected: (index) => setState(() => _tab = index), destinations: [for (final item in items) NavigationDestination(icon: Icon(item.icon), label: item.title)]),

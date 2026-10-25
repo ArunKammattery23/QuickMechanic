@@ -224,7 +224,7 @@ exports.AuthModule = AuthModule = __decorate([
                     }
                     return {
                         secret: secret || 'super-secret-key-change-in-prod',
-                        signOptions: { expiresIn: '7d' },
+                        signOptions: { expiresIn: '30d' },
                     };
                 },
             }),

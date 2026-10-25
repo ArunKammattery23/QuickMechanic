@@ -1149,6 +1149,85 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  // Online/offline indicator above the GO ONLINE button: a glowing dot plus
+  // a short label, green while scanning for jobs and grey while offline.
+  Widget _buildStatusPill() {
+    final color = isOnline ? Colors.greenAccent.shade400 : Colors.grey.shade400;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: isOnline
+                ? [BoxShadow(color: color.withOpacity(0.8), blurRadius: 8, spreadRadius: 1)]
+                : null,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          isOnline ? 'LIVE · Scanning for requests' : 'Offline',
+          style: TextStyle(
+            color: isOnline ? color : Colors.white.withOpacity(0.75),
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildWizardCard() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _showWizardBottomSheet,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(colors: [
+              const Color(0xFF4DA8FF).withOpacity(0.16),
+              const Color(0xFF4DA8FF).withOpacity(0.05),
+            ]),
+            border: Border.all(color: const Color(0xFF4DA8FF).withOpacity(0.35)),
+          ),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF4DA8FF).withOpacity(0.2),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.tune_rounded, color: Color(0xFF4DA8FF), size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Configuration Wizard',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                Text('Services, vehicles & prices',
+                    style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13)),
+              ]),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: Color(0xFF4DA8FF)),
+          ]),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDailyStatsPanel() {
     return ClipRRect(
       borderRadius: BorderRadius.circular(28),
@@ -1518,30 +1597,16 @@ class _DashboardScreenState extends State<DashboardScreen>
                                           ])))),
                           _buildDailyStatsPanel(),
 
-                          const SizedBox(height: 40),
-
-                          // The toggle button was moved to a fixed floating position at the bottom of the screen
-                          const SizedBox(height: 40),
-
-                          if (!isOnline)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 40),
-                              child: TextButton.icon(
-                                onPressed: _showWizardBottomSheet,
-                                icon: const Icon(Icons.settings,
-                                    color: Colors.lightBlueAccent),
-                                label: const Text(
-                                  'Configuration Wizard',
-                                  style: TextStyle(
-                                      color: Colors.lightBlueAccent,
-                                      fontSize: 16),
-                                ),
-                              ),
-                            ),
+                          // Sits under the stats card so it never slides
+                          // beneath the floating status and GO ONLINE button.
+                          if (!isOnline) ...[
+                            const SizedBox(height: 16),
+                            _buildWizardCard(),
+                          ],
 
                           const SizedBox(
                               height:
-                                  120), // Bottom padding for floating button
+                                  170), // Bottom padding for floating button
                         ]
                       ],
                     ),
@@ -1557,16 +1622,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          isOnline
-                              ? 'Scanning for breakdown requests...'
-                              : 'You are currently offline',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
-                            fontSize: 14,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
+                        _buildStatusPill(),
                         const SizedBox(height: 16),
                         GestureDetector(
                           onTap: _toggleOnlineStatus,

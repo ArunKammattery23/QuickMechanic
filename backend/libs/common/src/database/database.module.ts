@@ -21,6 +21,15 @@ import { Badge } from '../entities/badge.entity';
 import { ReputationRule } from '../entities/reputation-rule.entity';
 import { ReputationLog } from '../entities/reputation-log.entity';
 
+export function normalizePem(raw: string): string {
+  const blocks = raw.replace(/\\n/g, '\n')
+    .match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g) ?? [];
+  return blocks.map(block => {
+    const body = block.replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '');
+    return `-----BEGIN CERTIFICATE-----\n${body.match(/.{1,64}/g)!.join('\n')}\n-----END CERTIFICATE-----\n`;
+  }).join('');
+}
+
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
@@ -35,9 +44,10 @@ import { ReputationLog } from '../entities/reputation-log.entity';
           const caInline = configService.get<string>('DB_CA_CERT');
           const caPath = configService.get<string>('DB_CA_PATH');
           if (caInline && caInline.includes('BEGIN CERTIFICATE')) {
-            // Env-var CAs often arrive with escaped newlines when pasted through
-            // UIs; normalize so Node's TLS parser accepts them.
-            ssl = { rejectUnauthorized: true, ca: caInline.replace(/\\n/g, '\n') };
+            // Hosting dashboards often turn the PEM's line breaks into spaces,
+            // literal "\n" or nothing at all, which makes TLS reject the chain.
+            // Rebuild a canonical PEM (64-char base64 lines) from the body.
+            ssl = { rejectUnauthorized: true, ca: normalizePem(caInline) };
           } else if (caPath) {
             const resolved = path.isAbsolute(caPath) ? caPath : path.resolve(process.cwd(), caPath);
             try {

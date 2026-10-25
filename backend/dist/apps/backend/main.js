@@ -6231,6 +6231,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DatabaseModule = void 0;
+exports.normalizePem = normalizePem;
 const payment_ledger_entity_1 = __webpack_require__(39);
 const provider_kyc_submission_entity_1 = __webpack_require__(32);
 const support_ticket_entity_1 = __webpack_require__(70);
@@ -6253,6 +6254,14 @@ const wallet_transaction_entity_1 = __webpack_require__(51);
 const badge_entity_1 = __webpack_require__(19);
 const reputation_rule_entity_1 = __webpack_require__(76);
 const reputation_log_entity_1 = __webpack_require__(77);
+function normalizePem(raw) {
+    const blocks = raw.replace(/\\n/g, '\n')
+        .match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g) ?? [];
+    return blocks.map(block => {
+        const body = block.replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '');
+        return `-----BEGIN CERTIFICATE-----\n${body.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`;
+    }).join('');
+}
 let DatabaseModule = class DatabaseModule {
 };
 exports.DatabaseModule = DatabaseModule;
@@ -6267,7 +6276,7 @@ exports.DatabaseModule = DatabaseModule = __decorate([
                         const caInline = configService.get('DB_CA_CERT');
                         const caPath = configService.get('DB_CA_PATH');
                         if (caInline && caInline.includes('BEGIN CERTIFICATE')) {
-                            ssl = { rejectUnauthorized: true, ca: caInline.replace(/\\n/g, '\n') };
+                            ssl = { rejectUnauthorized: true, ca: normalizePem(caInline) };
                         }
                         else if (caPath) {
                             const resolved = path.isAbsolute(caPath) ? caPath : path.resolve(process.cwd(), caPath);

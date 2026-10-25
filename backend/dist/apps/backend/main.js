@@ -6535,8 +6535,11 @@ class RedisIoAdapter extends platform_socket_io_1.IoAdapter {
         const pubClient = (0, redis_1.createClient)({ url: redisUrl, socket });
         const subClient = pubClient.duplicate();
         this.clients = [pubClient, subClient];
-        for (const client of [pubClient, subClient])
-            client.on('error', () => this.logger.error('Redis socket adapter connection error'));
+        for (const [name, client] of [['pub', pubClient], ['sub', subClient]]) {
+            client.on('error', (error) => this.logger.error(`Redis socket adapter (${name}) connection error: ${error?.code ? `${error.code} ` : ''}${error?.message ?? error}`));
+            client.on('reconnecting', () => this.logger.warn(`Redis socket adapter (${name}) reconnecting`));
+            client.on('ready', () => this.logger.log(`Redis socket adapter (${name}) ready`));
+        }
         try {
             await Promise.all([pubClient.connect(), subClient.connect()]);
         }

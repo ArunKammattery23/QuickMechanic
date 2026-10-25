@@ -21,7 +21,14 @@ export class RedisIoAdapter extends IoAdapter {
     const pubClient = createClient({ url: redisUrl, socket } as any);
     const subClient = pubClient.duplicate();
     this.clients = [pubClient, subClient];
-    for (const client of [pubClient, subClient]) client.on('error', () => this.logger.error('Redis socket adapter connection error'));
+    // Log the real cause (never the URL, which carries the password) and the
+    // reconnect lifecycle, so a dropped connection can be told from a lasting one.
+    for (const [name, client] of [['pub', pubClient], ['sub', subClient]] as const) {
+      client.on('error', (error: Error & { code?: string }) =>
+        this.logger.error(`Redis socket adapter (${name}) connection error: ${error?.code ? `${error.code} ` : ''}${error?.message ?? error}`));
+      client.on('reconnecting', () => this.logger.warn(`Redis socket adapter (${name}) reconnecting`));
+      client.on('ready', () => this.logger.log(`Redis socket adapter (${name}) ready`));
+    }
     try {
       await Promise.all([pubClient.connect(), subClient.connect()]);
     } catch (error) {

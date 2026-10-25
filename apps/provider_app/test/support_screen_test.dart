@@ -11,10 +11,17 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: SupportScreen(token: 'test-token')));
       await tester.pumpAndSettle();
       expect(find.text('WAITING FOR USER'), findsOneWidget);
-      await tester.enterText(find.widgetWithText(TextField, 'Ask a question'), 'How do I check my job?');
+      // Common topics are answered instantly from the built-in guide.
+      await tester.enterText(find.widgetWithText(TextField, 'Ask a question'), 'How do I withdraw my earnings?');
       await tester.tap(find.text('Ask guide'));
       await tester.pumpAndSettle();
-      expect(find.text('Guide answer'), findsOneWidget);
+      expect(find.text('QUICK GUIDE'), findsOneWidget);
+      expect(find.textContaining('Wallet and history'), findsOneWidget);
+      // Anything else is sent to the server guide.
+      await tester.enterText(find.widgetWithText(TextField, 'Ask a question'), 'Do you offer weekend discounts for students?');
+      await tester.tap(find.text('Ask guide'));
+      await tester.pumpAndSettle();
+      expect(find.text('SUPPORT GUIDE'), findsOneWidget);
       expect(find.text('Check the active job.'), findsOneWidget);
     }, () => MockClient((request) async {
       if (request.url.path == '/support/bot') {
@@ -59,7 +66,7 @@ void main() {
       await tester.ensureVisible(find.text('Submit ticket'));
       await tester.tap(find.text('Submit ticket'));
       await tester.pumpAndSettle();
-      expect(find.text('Support ticket'), findsOneWidget);
+      expect(find.text('Support conversation'), findsOneWidget);
       expect(find.text('Route problem'), findsOneWidget);
       expect(find.text('OPEN'), findsOneWidget);
       expect(find.text('The route does not update'), findsOneWidget);

@@ -12,12 +12,13 @@ void main() {
     await http.runWithClient(() async {
       await tester.pumpWidget(const MaterialApp(home: KycVerificationScreen(token: 'test-token')));
       await tester.pumpAndSettle();
-      expect(find.text('Add front photo'), findsOneWidget);
-      expect(find.text('Add back photo'), findsOneWidget);
+      expect(find.text('Front side'), findsOneWidget);
+      expect(find.text('Back side'), findsOneWidget);
+      expect(find.text('Tap to add photo'), findsNWidgets(2));
       await tester.enterText(find.widgetWithText(TextFormField, 'Full address'), '12 Test Street, Bengaluru, Karnataka');
       await tester.enterText(find.widgetWithText(TextFormField, 'Secondary mobile number'), '9876543210');
-      await tester.ensureVisible(find.text('Submit for review'));
-      await tester.tap(find.text('Submit for review'));
+      await tester.ensureVisible(find.text('Submit for verification'));
+      await tester.tap(find.text('Submit for verification'));
       await tester.pump();
       expect(find.text('Add both front and back ID card photos.'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -28,11 +29,10 @@ void main() {
     await http.runWithClient(() async {
       await tester.pumpWidget(const MaterialApp(home: KycVerificationScreen(token: 'test-token')));
       await tester.pumpAndSettle();
-      expect(find.text('KYC awaiting review'), findsOneWidget);
+      expect(find.text('Under review'), findsOneWidget);
       expect(find.text('Front and back photos received'), findsOneWidget);
-      expect(find.text('Add front photo'), findsNothing);
-      expect(find.text('Add back photo'), findsNothing);
-      expect(find.text('Submit for review'), findsNothing);
+      expect(find.text('Tap to add photo'), findsNothing);
+      expect(find.text('Submit for verification'), findsNothing);
     }, () => MockClient((request) async => http.Response(jsonEncode({
       'submitted': true, 'status': 'PENDING', 'idType': 'AADHAAR',
       'address': '12 Test Street, Bengaluru, Karnataka',

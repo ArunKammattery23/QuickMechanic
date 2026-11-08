@@ -9,7 +9,7 @@ export class RedisIoAdapter extends IoAdapter {
   private clients: {readonly isOpen: boolean; close(): Promise<void>; destroy(): void}[] = [];
   private readonly logger = new Logger(RedisIoAdapter.name);
 
-  async connectToRedis(redisUrl: string): Promise<void> {
+  async connectToRedis(redisUrl: string, timeoutMs = 15000): Promise<void> {
     // Managed providers (Layerbase, Upstash, some Aiven endpoints) route by
     // TLS SNI, so we must set `servername` explicitly for a rediss:// URL even
     // though the hostname is already present in the URL.
@@ -29,11 +29,21 @@ export class RedisIoAdapter extends IoAdapter {
       client.on('reconnecting', () => this.logger.warn(`Redis socket adapter (${name}) reconnecting`));
       client.on('ready', () => this.logger.log(`Redis socket adapter (${name}) ready`));
     }
+    // A sleeping managed Redis can accept the TCP connection and then never
+    // finish waking. Give up after `timeoutMs` so the API still starts.
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Redis did not connect within ${timeoutMs} ms`)), timeoutMs);
+    });
     try {
-      await Promise.all([pubClient.connect(), subClient.connect()]);
+      await Promise.race([Promise.all([pubClient.connect(), subClient.connect()]), timeout]);
     } catch (error) {
-      await this.dispose();
+      // destroy() also stops the clients' background reconnect attempts.
+      for (const client of this.clients) if (client.isOpen) client.destroy();
+      this.clients = [];
       throw error;
+    } finally {
+      clearTimeout(timer);
     }
 
     this.adapterConstructor = createAdapter(pubClient, subClient);
@@ -41,7 +51,9 @@ export class RedisIoAdapter extends IoAdapter {
 
   createIOServer(port: number, options?: ServerOptions): any {
     const server = super.createIOServer(port, options);
-    server.adapter(this.adapterConstructor);
+    // Without Redis, Socket.IO keeps its default in-memory adapter, which is
+    // correct for a single instance.
+    if (this.adapterConstructor) server.adapter(this.adapterConstructor);
     return server;
   }
 

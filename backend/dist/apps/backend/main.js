@@ -39,7 +39,12 @@ async function bootstrap() {
     const redisUrl = configService.get('REDIS_URL') ||
         `redis://${configService.get('REDIS_HOST') || 'localhost'}:${configService.get('REDIS_PORT') || '6379'}`;
     const redisIoAdapter = new redis_adapter_1.RedisIoAdapter(app);
-    await redisIoAdapter.connectToRedis(redisUrl);
+    try {
+        await redisIoAdapter.connectToRedis(redisUrl);
+    }
+    catch (error) {
+        new common_1.Logger('Bootstrap').warn(`Starting without the Redis socket adapter (single-instance mode): ${error?.message ?? error}`);
+    }
     app.useWebSocketAdapter(redisIoAdapter);
     await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
@@ -6521,7 +6526,7 @@ class RedisIoAdapter extends platform_socket_io_1.IoAdapter {
     adapterConstructor;
     clients = [];
     logger = new common_1.Logger(RedisIoAdapter.name);
-    async connectToRedis(redisUrl) {
+    async connectToRedis(redisUrl, timeoutMs = 15000) {
         const useTls = redisUrl.startsWith('rediss://');
         const hostname = (() => { try {
             return new URL(redisUrl).hostname;
@@ -6540,18 +6545,29 @@ class RedisIoAdapter extends platform_socket_io_1.IoAdapter {
             client.on('reconnecting', () => this.logger.warn(`Redis socket adapter (${name}) reconnecting`));
             client.on('ready', () => this.logger.log(`Redis socket adapter (${name}) ready`));
         }
+        let timer;
+        const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Redis did not connect within ${timeoutMs} ms`)), timeoutMs);
+        });
         try {
-            await Promise.all([pubClient.connect(), subClient.connect()]);
+            await Promise.race([Promise.all([pubClient.connect(), subClient.connect()]), timeout]);
         }
         catch (error) {
-            await this.dispose();
+            for (const client of this.clients)
+                if (client.isOpen)
+                    client.destroy();
+            this.clients = [];
             throw error;
+        }
+        finally {
+            clearTimeout(timer);
         }
         this.adapterConstructor = (0, redis_adapter_1.createAdapter)(pubClient, subClient);
     }
     createIOServer(port, options) {
         const server = super.createIOServer(port, options);
-        server.adapter(this.adapterConstructor);
+        if (this.adapterConstructor)
+            server.adapter(this.adapterConstructor);
         return server;
     }
     async dispose() {

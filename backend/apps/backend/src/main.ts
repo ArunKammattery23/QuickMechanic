@@ -2,7 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { RedisIoAdapter } from './redis.adapter';
 import { ConfigService } from '@nestjs/config';
 
@@ -47,7 +47,13 @@ async function bootstrap() {
     `redis://${configService.get<string>('REDIS_HOST') || 'localhost'}:${configService.get<string>('REDIS_PORT') || '6379'}`;
 
   const redisIoAdapter = new RedisIoAdapter(app);
-  await redisIoAdapter.connectToRedis(redisUrl);
+  try {
+    await redisIoAdapter.connectToRedis(redisUrl);
+  } catch (error) {
+    // Never block startup on Redis: a free host that waits for the port
+    // would otherwise hold every request until it gives up.
+    new Logger('Bootstrap').warn(`Starting without the Redis socket adapter (single-instance mode): ${(error as Error)?.message ?? error}`);
+  }
   app.useWebSocketAdapter(redisIoAdapter);
 
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
